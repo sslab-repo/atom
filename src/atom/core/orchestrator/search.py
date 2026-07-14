@@ -56,6 +56,7 @@ class Orchestrator:
         budget: Budget,
         seed: int = 0,
         batch_size: int = DEFAULT_BATCH,
+        warm_specs: list[PipelineSpec] | None = None,
     ):
         self.task = task
         self.train = train
@@ -67,6 +68,7 @@ class Orchestrator:
         self._next_id = 0
         self._cost: dict[tuple[str, float], tuple[float, int]] = {}  # (method,fid)->(mean,n)
         self._fitted_full: dict[str, tuple[float, Any]] = {}  # spec.key -> (score, fitted)
+        self._warm = list(warm_specs or [])  # meta-KB winners: injected first (ADR flywheel)
 
         self.methods: dict[str, Module] = {
             m.declares().name: m
@@ -142,6 +144,11 @@ class Orchestrator:
                 self._sample_spec(method_names[i % len(method_names)])
                 for i in range(self.batch_size)
             ]
+            if self._warm:  # warm-starts lead the first batch(es)
+                known = {m for m in self.methods}
+                usable = [s for s in self._warm if s.method["name"] in known]
+                specs = (usable + specs)[: max(self.batch_size, len(usable))]
+                self._warm = []
             self.rng.shuffle(method_names)
             survivors = specs
             for rung, fidelity in enumerate(rung_fidelities):

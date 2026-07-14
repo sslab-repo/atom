@@ -42,6 +42,7 @@ def run_package(
     min_trials: int | None = None,
     max_rows: int = 100_000,
     out_root: str = "runs",
+    kb_root: str | None = None,  # default: $ATOM_HOME/metakb or ~/.atom/metakb
     seed: int = 0,
     confirm: Callable[[TaskSpec, Fingerprint], bool] = lambda spec, fp: True,
     progress: Callable[[str], None] = lambda s: None,
@@ -88,8 +89,21 @@ def run_package(
                      f"metric={task.primary_metric}"
                      + (", imbalanced" if task.imbalanced else ""))
 
+        # Meta-KB flywheel (M4): nearest-fingerprint winners warm-start the search.
+        from atom.core.orchestrator.pipeline import PipelineSpec
+        from atom.metakb import MetaKB, summarize_for_kb
+
+        kb = MetaKB(kb_root)
+        summary = summarize_for_kb(fp, task)
+        neighbors = kb.nearest(summary)
+        warm_specs = [PipelineSpec(**n["best_pipeline"]) for n in neighbors]
+        if neighbors:
+            progress(f"meta-KB: warm-starting from {len(neighbors)} similar run(s), "
+                     f"best prior {task.primary_metric}≈{abs(neighbors[0]['val_score']):.3f}, "
+                     f"cost≈{neighbors[0]['cost_s']:.0f}s")
+
         evaluator = Evaluator(task, val)
-        orch = Orchestrator(task, train, evaluator, budget, seed=seed)
+        orch = Orchestrator(task, train, evaluator, budget, seed=seed, warm_specs=warm_specs)
         progress(f"searching: {len(orch.methods)} methods × preprocessing, "
                  f"budget {wall_clock_s:.0f}s" + (f" / {max_trials} trials" if max_trials else ""))
         orch.run(progress=progress)
@@ -99,7 +113,7 @@ def run_package(
         if not top:
             raise SystemExit("no successful trials within budget — increase --time-budget")
         progress(f"finalizing: up to {len(top)} candidates at full fidelity…")
-        candidates, outputs = [], []
+        candidates, outputs, kept = [], [], []
         for t in top:
             # Finalize honors the budget too: always produce >=1 candidate
             # (never end without a usable artifact), stop adding more once
@@ -113,6 +127,7 @@ def run_package(
                     fitted = fit_pipeline(t.spec, orch.modules, train, 1.0, seed=t.seed)
                 candidates.append(fitted)
                 outputs.append(fitted.predict(val.X))
+                kept.append(t)  # stays index-aligned with candidates/outputs
             except Exception as exc:  # a candidate failing must not kill the run
                 progress(f"candidate failed at full fidelity, skipping: {exc}")
         if not candidates:
@@ -164,7 +179,7 @@ def run_package(
             "test": test_metrics,
             "candidates": [
                 {"pipeline": t.spec.to_dict(), "val_score_oriented": s}
-                for t, s in zip(top, singles)
+                for t, s in zip(kept, singles)
             ],
             "ensemble_members": ensemble.members if use_ensemble else None,
         })
@@ -203,6 +218,12 @@ def run_package(
                  f"({len(amp['graphs'])} ONNX graph(s), parity "
                  f"{'ok' if all(p.get('pass') for p in amp['parity']) else 'FAILED'})")
         writer.close()
+
+        # Store the flywheel record: fingerprint summary -> winning config.
+        best_spec = (kept[best_single_idx].spec if not use_ensemble
+                     else kept[max(set(ensemble.members), key=ensemble.members.count)].spec)
+        kb.append(summary, pkg.manifest.content_id, best_spec.to_dict(),
+                  val_score, test_metrics, budget.elapsed)
 
         return RunOutcome(
             run_dir=str(writer.dir), task=task, final_kind=final_kind, val_score=val_score,
