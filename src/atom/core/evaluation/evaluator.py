@@ -36,8 +36,12 @@ class Evaluator:
             raise RuntimeError(f"no metric module for {spec.family.value}")
         self.metric_module: Module = evaluators[0]
 
-    def score_predictions(self, y_true, outputs: dict[str, Any]) -> dict[str, float]:
+    def score_predictions(
+        self, y_true, outputs: dict[str, Any], X=None
+    ) -> dict[str, float]:
         data = {"y_true": y_true, **outputs}
+        if X is not None:  # unsupervised metrics (silhouette) need the features
+            data["X"] = X
         return self.metric_module.run(RunContext(Operation.SCORE, data)).metrics
 
     def oriented(self, metrics: dict[str, float]) -> float:
@@ -49,7 +53,7 @@ class Evaluator:
 
     def evaluate(self, pipeline: "FittedPipeline", started: float) -> EvalResult:
         outputs = pipeline.predict(self.val.X)
-        metrics = self.score_predictions(self.val.y, outputs)
+        metrics = self.score_predictions(self.val.y, outputs, X=self.val.X)
         return EvalResult(
             score=self.oriented(metrics), metrics=metrics, cost_s=time.monotonic() - started
         )

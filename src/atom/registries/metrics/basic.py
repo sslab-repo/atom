@@ -43,7 +43,31 @@ class _MetricBundle(Module):
 HIGHER_IS_BETTER = {
     "accuracy": True, "balanced_accuracy": True, "f1_macro": True, "roc_auc": True,
     "r2": True, "rmse": False, "mae": False,
+    "silhouette": True, "davies_bouldin": False,
 }
+
+
+@register
+class ClusteringMetrics(_MetricBundle):
+    def declares(self) -> Declaration:
+        return Declaration(
+            name="clustering-basic", version="1.0", kind=ModuleKind.METRIC,
+            task_families=frozenset({TaskFamily.CLUSTERING}),
+            modalities=_ALL_MODALITIES, category="clustering",
+        )
+
+    def _compute(self, data) -> dict[str, float]:
+        from sklearn import metrics as sk
+
+        X, labels = data["X"], np.asarray(data["pred"])
+        if len(set(labels.tolist())) < 2:
+            return {"silhouette": -1.0, "davies_bouldin": float("inf")}
+        sample = min(len(labels), 5000)
+        idx = np.random.default_rng(0).choice(len(labels), size=sample, replace=False)
+        return {
+            "silhouette": float(sk.silhouette_score(X[idx], labels[idx])),
+            "davies_bouldin": float(sk.davies_bouldin_score(X, labels)),
+        }
 
 
 @register

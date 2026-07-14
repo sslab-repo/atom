@@ -19,7 +19,11 @@ from atom.core.task_inference import TaskSpec, infer
 from atom.data import DatasetPackage
 from atom.registries.builtins import load_builtins
 
-RUNNABLE_FAMILIES = {TaskFamily.CLASSIFICATION, TaskFamily.REGRESSION}
+RUNNABLE_FAMILIES = {
+    TaskFamily.CLASSIFICATION, TaskFamily.REGRESSION,
+    TaskFamily.CLUSTERING, TaskFamily.ANOMALY_DETECTION,
+}
+SUPERVISED = {TaskFamily.CLASSIFICATION, TaskFamily.REGRESSION}
 TOP_K = 5
 
 
@@ -43,6 +47,8 @@ def run_package(
     max_rows: int = 100_000,
     out_root: str = "runs",
     kb_root: str | None = None,  # default: $ATOM_HOME/metakb or ~/.atom/metakb
+    force_task: str | None = None,  # task-family override (confirm gate)
+    include_experimental: bool = False,
     seed: int = 0,
     confirm: Callable[[TaskSpec, Fingerprint], bool] = lambda spec, fp: True,
     progress: Callable[[str], None] = lambda s: None,
@@ -52,17 +58,21 @@ def run_package(
 
     with DatasetPackage.open(package_path) as pkg:
         fp = fingerprint(pkg)
-        task = infer(fp, target_override=target)
+        task = infer(fp, target_override=target, task_override=force_task)
 
         if task.family not in RUNNABLE_FAMILIES:
             raise SystemExit(
                 f"task inferred as {task.family.value}"
                 + (f"/{task.setting.value}" if task.setting else "")
-                + " — no stable modules for this family yet (M5). "
+                + " — no stable modules for this family yet. "
                 "For supervised data pass --target <column>."
             )
         if not confirm(task, fp):  # the confirm gate (ADR: before spending budget)
             raise SystemExit("aborted at confirm gate")
+
+        if task.family is TaskFamily.ANOMALY_DETECTION:
+            return _run_anomaly(pkg, fp, task, wall_clock_s, max_rows, out_root,
+                                include_experimental, seed, progress, started)
 
         budget = Budget(wall_clock_s=wall_clock_s, max_trials=max_trials, min_trials=min_trials)
         progress(f"loading train/val (max {max_rows:,} train rows)…")
@@ -103,7 +113,8 @@ def run_package(
                      f"cost≈{neighbors[0]['cost_s']:.0f}s")
 
         evaluator = Evaluator(task, val)
-        orch = Orchestrator(task, train, evaluator, budget, seed=seed, warm_specs=warm_specs)
+        orch = Orchestrator(task, train, evaluator, budget, seed=seed, warm_specs=warm_specs,
+                    include_experimental=include_experimental)
         progress(f"searching: {len(orch.methods)} methods × preprocessing, "
                  f"budget {wall_clock_s:.0f}s" + (f" / {max_trials} trials" if max_trials else ""))
         orch.run(progress=progress)
@@ -132,11 +143,16 @@ def run_package(
                 progress(f"candidate failed at full fidelity, skipping: {exc}")
         if not candidates:
             raise SystemExit("all finalize candidates failed — see trials.jsonl")
-        singles = [evaluator.oriented(evaluator.score_predictions(val.y, o)) for o in outputs]
+        singles = [evaluator.oriented(evaluator.score_predictions(val.y, o, X=val.X))
+                   for o in outputs]
         best_single_idx = max(range(len(singles)), key=singles.__getitem__)
 
-        ensemble, ens_score = greedy_ensemble(evaluator, outputs, val.y)
-        use_ensemble = ens_score > singles[best_single_idx] and len(set(ensemble.members)) > 1
+        if task.family in SUPERVISED:
+            ensemble, ens_score = greedy_ensemble(evaluator, outputs, val.y)
+            use_ensemble = (ens_score > singles[best_single_idx]
+                            and len(set(ensemble.members)) > 1)
+        else:  # clustering: labels aren't comparable across models — no ensembling
+            ensemble, use_ensemble = None, False
 
         # LOCKED test set: read once, here, for the final report only.
         test = load_matrix(pkg, fp, "test", task.target, max_rows=max(max_rows // 2, 10_000),
@@ -157,7 +173,7 @@ def run_package(
             final_kind = "single"
             final_test = test_outputs[best_single_idx]
             val_score = singles[best_single_idx]
-        test_metrics = evaluator.score_predictions(test.y, final_test)
+        test_metrics = evaluator.score_predictions(test.y, final_test, X=test.X)
 
         writer = RunWriter(out_root, pkg.source.name)
         writer.write_run({
@@ -212,7 +228,7 @@ def run_package(
                 "split": pkg.manifest.split.get("file"),
                 "atom_run": writer.dir.name,
             },
-            is_classifier=task.family is TaskFamily.CLASSIFICATION,
+            is_classifier=task.family is not TaskFamily.REGRESSION,
         )
         progress(f"AMP: deployable={amp['deployable']} "
                  f"({len(amp['graphs'])} ONNX graph(s), parity "
@@ -230,3 +246,93 @@ def run_package(
             test_metrics=test_metrics, n_trials=len(orch.archive),
             elapsed_s=time.monotonic() - started,
         )
+
+
+def _run_anomaly(pkg, fp, task, wall_clock_s, max_rows, out_root,
+                 include_experimental, seed, progress, started) -> RunOutcome:
+    """Anomaly path (unlabeled): no honest model selection is possible
+    without labels, so this is a DESCRIPTIVE run — fit the default config of
+    the first matching stable detector, report score distribution and
+    flagged fractions per split, ship the fitted detector + provenance."""
+    import numpy as np
+
+    from atom.contract import Modality, ModuleKind
+    from atom.core.orchestrator.pipeline import PipelineSpec
+    from atom.registries import find
+
+    detectors = [
+        m for m in find(ModuleKind.METHOD, task.family, Modality(task.modality),
+                        include_experimental=include_experimental)
+        if m.declares().setting == task.setting
+    ]
+    if not detectors:
+        raise SystemExit(f"no {task.setting.value} detector modules registered")
+    detector = detectors[0]
+    decl = detector.declares()
+    progress(f"anomaly ({task.setting.value}): {decl.name} with default config")
+
+    train = load_matrix(pkg, fp, "train", None, max_rows=max_rows, seed=seed)
+    modules = {decl.name: detector}
+    pre = []
+    for name in ("impute-simple", "scale"):
+        for m in find(ModuleKind.PREPROCESSING, task.family, Modality(task.modality)):
+            if m.declares().name == name:
+                modules[name] = m
+                pre.append({"name": name, "version": m.declares().version, "config": {}})
+    defaults = {p.name: p.default for p in detector.space().parameters
+                if p.default is not None}
+    spec = PipelineSpec(preprocessing=pre,
+                        method={"name": decl.name, "version": decl.version,
+                                "config": defaults})
+    fitted = fit_pipeline(spec, modules, train, 1.0, seed=seed)
+
+    report: dict[str, dict] = {}
+    for split in ("val", "test"):
+        m = load_matrix(pkg, fp, split, None, max_rows=max(max_rows // 2, 10_000),
+                        seed=seed + 1)
+        out = fitted.predict(m.X)
+        pred = np.asarray(out["pred"])
+        entry = {"rows": int(len(pred)),
+                 "flagged_fraction": float(np.mean(pred == -1))}
+        if out.get("score") is not None:
+            s = np.asarray(out["score"], dtype=float)
+            entry["score_percentiles"] = {
+                q: float(np.percentile(s, int(q))) for q in ("1", "5", "50", "95", "99")}
+        report[split] = entry
+        progress(f"{split}: flagged {entry['flagged_fraction']:.2%} of {entry['rows']:,} rows")
+
+    writer = RunWriter(out_root, pkg.source.name)
+    writer.write_run({
+        "package": {"id": pkg.manifest.content_id, "name": pkg.manifest.name},
+        "task": task.to_dict(),
+        "pipeline": spec.to_dict(),
+        "data": {"train_rows": train.n, "features": len(train.features),
+                 "dropped": train.dropped},
+        "seed": seed,
+    })
+    test_metrics = {"flagged_fraction": report["test"]["flagged_fraction"]}
+    writer.write_metrics({"primary_metric": "descriptive", "final": "anomaly-detector",
+                          "report": report})
+    writer.write_model({"task": task.to_dict(), "kind": "anomaly-detector",
+                        "pipelines": [fitted], "ensemble": None,
+                        "features": train.features})
+
+    from atom.core.provenance.amp import export_amp
+
+    amp = export_amp(
+        run_dir=writer.dir, task=task.to_dict(), candidates=[fitted],
+        ensemble_members=None, classes=None, features=train.features,
+        sample_X=train.X[:256],
+        lineage={"dataset_id": pkg.manifest.content_id,
+                 "dataset_name": pkg.manifest.name,
+                 "split": pkg.manifest.split.get("file"),
+                 "atom_run": writer.dir.name},
+        is_classifier=True,  # discrete -1/1 labels: parity by agreement
+    )
+    progress(f"AMP: deployable={amp['deployable']}")
+    writer.close()
+    import time as _t
+
+    return RunOutcome(run_dir=str(writer.dir), task=task, final_kind="anomaly-detector",
+                      val_score=float("nan"), test_metrics=test_metrics,
+                      n_trials=1, elapsed_s=_t.monotonic() - started)

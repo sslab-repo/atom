@@ -3,5 +3,5 @@
 
 def load_builtins() -> None:
     from atom.registries.metrics import basic  # noqa: F401
-    from atom.registries.methods import sklearn_supervised  # noqa: F401
+    from atom.registries.methods import sklearn_supervised, sklearn_unsupervised  # noqa: F401
     from atom.registries.preprocessing import simple  # noqa: F401

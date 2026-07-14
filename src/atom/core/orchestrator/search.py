@@ -57,6 +57,7 @@ class Orchestrator:
         seed: int = 0,
         batch_size: int = DEFAULT_BATCH,
         warm_specs: list[PipelineSpec] | None = None,
+        include_experimental: bool = False,
     ):
         self.task = task
         self.train = train
@@ -72,7 +73,8 @@ class Orchestrator:
 
         self.methods: dict[str, Module] = {
             m.declares().name: m
-            for m in find(ModuleKind.METHOD, task.family, Modality(task.modality))
+            for m in find(ModuleKind.METHOD, task.family, Modality(task.modality),
+                          include_experimental=include_experimental)
         }
         if not self.methods:
             raise RuntimeError(f"no method modules for {task.family.value}/{task.modality.value}")

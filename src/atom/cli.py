@@ -72,6 +72,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         max_rows=args.max_rows,
         out_root=args.out,
         kb_root=args.kb,
+        force_task=args.task,
+        include_experimental=args.include_experimental,
         seed=args.seed,
         confirm=lambda task, fp: _confirm_gate(task, fp, args.yes),
         progress=lambda s: print(f"  {s}"),
@@ -83,6 +85,75 @@ def _cmd_run(args: argparse.Namespace) -> int:
     print("  test     : " + "  ".join(f"{k}={v:.4f}" for k, v in outcome.test_metrics.items()))
     print(f"  artifacts: {outcome.run_dir}")
     return 0
+
+
+def _cmd_modules(args: argparse.Namespace) -> int:
+    from atom.registries import all_modules, discover, lifecycle_of
+    from atom.registries.builtins import load_builtins
+
+    load_builtins()
+    n_ext = discover()
+    if n_ext:
+        print(f"(discovered {n_ext} external module(s) via entry points)")
+    modules = sorted(all_modules(), key=lambda m: (m.declares().kind.value, m.declares().name))
+    if args.action == "list":
+        for m in modules:
+            d = m.declares()
+            fams = ",".join(sorted(f.value for f in d.task_families))
+            print(f"  {d.kind.value:<14} {d.name}@{d.version:<6} [{lifecycle_of(m)}] "
+                  f"{d.category:<20} {fams}")
+        return 0
+    failures = 0
+    for m in modules:
+        status = _smoke(m)
+        print(f"  {'PASS' if status == 'PASS' else 'FAIL':<5} {m.declares().name}"
+              + ("" if status == "PASS" else f"  ({status})"))
+        failures += status != "PASS"
+    print(f"{len(modules) - failures}/{len(modules)} modules pass the smoke gate")
+    return 1 if failures else 0
+
+
+def _smoke(module) -> str:
+    """Contract-conformance smoke: declaration valid + a tiny synthetic run."""
+    import numpy as np
+
+    from atom.contract import ModuleKind, Operation, RunContext, TaskFamily
+
+    d = module.declares()
+    problems = d.validate()
+    if problems:
+        return "; ".join(problems)
+    rng = np.random.default_rng(0)
+    X = rng.normal(size=(80, 4))
+    try:
+        if d.kind is ModuleKind.PREPROCESSING:
+            Xn = X.copy()
+            Xn[0, 0] = np.nan
+            r = module.run(RunContext(Operation.FIT, {"X": Xn}))
+            module.run(RunContext(Operation.TRANSFORM, {"X": Xn}, artifacts=r.artifacts))
+        elif d.kind is ModuleKind.METHOD:
+            fam = next(iter(d.task_families))
+            if fam in (TaskFamily.CLASSIFICATION, TaskFamily.REGRESSION):
+                y = ((X[:, 0] > 0).astype(str) if fam is TaskFamily.CLASSIFICATION
+                     else X[:, 0] * 2 + 1)
+                r = module.run(RunContext(Operation.FIT, {"X": X, "y": y}))
+                module.run(RunContext(Operation.SCORE, {"X": X}, artifacts=r.artifacts))
+            elif fam is TaskFamily.DIMENSION_REDUCTION:
+                r = module.run(RunContext(Operation.FIT, {"X": X, "y": None}))
+                module.run(RunContext(Operation.TRANSFORM, {"X": X}, artifacts=r.artifacts))
+            else:  # clustering, anomaly
+                r = module.run(RunContext(Operation.FIT, {"X": X, "y": None}))
+                module.run(RunContext(Operation.SCORE, {"X": X}, artifacts=r.artifacts))
+        elif d.kind is ModuleKind.METRIC:
+            fam = next(iter(d.task_families))
+            pred = (X[:, 0] > 0).astype(str)
+            data = {"y_true": pred, "pred": pred, "X": X}
+            if fam is TaskFamily.REGRESSION:
+                data = {"y_true": X[:, 0], "pred": X[:, 0]}
+            module.run(RunContext(Operation.SCORE, data))
+        return "PASS"
+    except Exception as exc:
+        return f"{type(exc).__name__}: {exc}"
 
 
 def _cmd_pack(args: argparse.Namespace) -> int:
@@ -113,9 +184,18 @@ def main(argv: list[str] | None = None) -> int:
     p_run.add_argument("--max-rows", type=int, default=100_000)
     p_run.add_argument("--out", default="runs")
     p_run.add_argument("--kb", help="meta-KB root (default: $ATOM_HOME/metakb or ~/.atom/metakb)")
+    p_run.add_argument("--task", choices=["classification", "regression", "clustering",
+                                          "anomaly-detection"],
+                       help="override the inferred task family")
+    p_run.add_argument("--include-experimental", action="store_true",
+                       help="let experimental (unpromoted) modules join the search")
     p_run.add_argument("--seed", type=int, default=0)
     p_run.add_argument("--yes", "-y", action="store_true", help="skip the confirm gate")
     p_run.set_defaults(func=_cmd_run)
+
+    p_mod = sub.add_parser("modules", help="list registered modules / run the smoke gate")
+    p_mod.add_argument("action", choices=["list", "verify"])
+    p_mod.set_defaults(func=_cmd_modules)
 
     p_pack = sub.add_parser("pack", help="convert a loose CSV into an ATOM Dataset Package")
     p_pack.add_argument("csv")

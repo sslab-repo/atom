@@ -37,10 +37,26 @@ class TaskSpec:
 CLASSIFICATION_MAX_NUMERIC_CLASSES = 20
 
 
-def infer(fp: Fingerprint, target_override: str | None = None) -> TaskSpec:
+def infer(
+    fp: Fingerprint,
+    target_override: str | None = None,
+    task_override: str | None = None,
+) -> TaskSpec:
     modality = Modality(fp.modality) if fp.modality else Modality.TABULAR
     target = target_override or (fp.roles.get("target") or [None])[0]
     notes: list[str] = []
+
+    if task_override:  # confirm-gate override: everything is overridable
+        family = TaskFamily(task_override)
+        notes.append(f"task family overridden by user: {family.value}")
+        spec = TaskSpec(
+            family=family, modality=modality,
+            target=target if family in (TaskFamily.CLASSIFICATION, TaskFamily.REGRESSION) else None,
+            setting=DetectionSetting.OUTLIER if family is TaskFamily.ANOMALY_DETECTION else None,
+            notes=notes,
+        )
+        _attach_metric(spec)
+        return spec
     if target_override and target_override != (fp.roles.get("target") or [None])[0]:
         notes.append(f"target overridden by user: {target_override}")
 
