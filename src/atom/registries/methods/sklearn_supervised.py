@@ -129,7 +129,8 @@ class HistGBClassifierM(_Supervised):
 
         return HistGradientBoostingClassifier(
             learning_rate=config.get("learning_rate", 0.1), max_iter=config.get("max_iter", 150),
-            max_leaf_nodes=config.get("max_leaf_nodes", 31), random_state=seed)
+            max_leaf_nodes=config.get("max_leaf_nodes", 31), random_state=seed,
+            early_stopping=False)  # auto-ES stratified-splits; breaks on 1-member classes
 
 
 # --- regression ------------------------------------------------------------

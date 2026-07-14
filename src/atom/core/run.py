@@ -107,11 +107,16 @@ def run_package(
             if candidates and budget.elapsed >= wall_clock_s:
                 progress(f"budget reached — finalizing with {len(candidates)} candidate(s)")
                 break
-            fitted = orch.get_fitted(t.spec.key())  # reuse search-time fit
-            if fitted is None:
-                fitted = fit_pipeline(t.spec, orch.modules, train, 1.0, seed=t.seed)
-            candidates.append(fitted)
-            outputs.append(fitted.predict(val.X))
+            try:
+                fitted = orch.get_fitted(t.spec.key())  # reuse search-time fit
+                if fitted is None:
+                    fitted = fit_pipeline(t.spec, orch.modules, train, 1.0, seed=t.seed)
+                candidates.append(fitted)
+                outputs.append(fitted.predict(val.X))
+            except Exception as exc:  # a candidate failing must not kill the run
+                progress(f"candidate failed at full fidelity, skipping: {exc}")
+        if not candidates:
+            raise SystemExit("all finalize candidates failed — see trials.jsonl")
         singles = [evaluator.oriented(evaluator.score_predictions(val.y, o)) for o in outputs]
         best_single_idx = max(range(len(singles)), key=singles.__getitem__)
 
@@ -171,6 +176,32 @@ def run_package(
             "ensemble": ensemble if use_ensemble else None,
             "features": train.features,
         })
+        # AMP export (ADR-0004): fused ONNX graph(s) + parity gate. Failure
+        # never kills the run — deployable:false with native/ fallback.
+        from atom.core.provenance.amp import export_amp
+
+        amp_candidates = candidates if use_ensemble else [candidates[best_single_idx]]
+        amp = export_amp(
+            run_dir=writer.dir,
+            task=task.to_dict(),
+            candidates=amp_candidates,
+            ensemble_members=ensemble.members if use_ensemble else None,
+            classes=(ensemble.classes if use_ensemble else
+                     [str(c) for c in (test_outputs[best_single_idx].get("classes") or [])]
+                     or None),
+            features=train.features,
+            sample_X=val.X[:256],
+            lineage={
+                "dataset_id": pkg.manifest.content_id,
+                "dataset_name": pkg.manifest.name,
+                "split": pkg.manifest.split.get("file"),
+                "atom_run": writer.dir.name,
+            },
+            is_classifier=task.family is TaskFamily.CLASSIFICATION,
+        )
+        progress(f"AMP: deployable={amp['deployable']} "
+                 f"({len(amp['graphs'])} ONNX graph(s), parity "
+                 f"{'ok' if all(p.get('pass') for p in amp['parity']) else 'FAILED'})")
         writer.close()
 
         return RunOutcome(
