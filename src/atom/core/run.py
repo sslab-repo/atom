@@ -70,6 +70,13 @@ def run_package(
         if not confirm(task, fp):  # the confirm gate (ADR: before spending budget)
             raise SystemExit("aborted at confirm gate")
 
+        if pkg.manifest.mode != "tabular":
+            raise SystemExit(
+                f"modality '{fp.modality}' (mode={pkg.manifest.mode}): data plane is "
+                "ready (pack/inspect work) but method modules for this modality land "
+                "with the foundation adapters — deferred, see docs/status.md."
+            )
+
         if task.family is TaskFamily.ANOMALY_DETECTION:
             return _run_anomaly(pkg, fp, task, wall_clock_s, max_rows, out_root,
                                 include_experimental, seed, progress, started)

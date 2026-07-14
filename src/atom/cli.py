@@ -204,8 +204,23 @@ def main(argv: list[str] | None = None) -> int:
     p_pack.add_argument("--target", help="target/label column name")
     p_pack.set_defaults(func=_cmd_pack)
 
+    p_pimg = sub.add_parser("pack-images",
+                            help="convert an image folder (class-per-subfolder) into an ADP")
+    p_pimg.add_argument("folder")
+    p_pimg.add_argument("--out", "-o", default=".")
+    p_pimg.add_argument("--name")
+    p_pimg.set_defaults(func=_cmd_pack_images)
+
     args = parser.parse_args(argv)
     return args.func(args)
+
+
+def _cmd_pack_images(args: argparse.Namespace) -> int:
+    from atom.data import pack_images
+
+    root = pack_images(args.folder, args.out, name=args.name)
+    print(f"wrote image ADP: {root}")
+    return 0
 
 
 if __name__ == "__main__":

@@ -110,6 +110,25 @@ def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
     if dupish:
         fp.quality_flags.append(f"deduplicated-column-names:{','.join(sorted(dupish)[:5])}")
 
+    if m.mode == "files":  # per-sample files (image etc.): listing-based profile
+        import json as _json
+
+        member = "processed/train.jsonl"
+        if not pkg.source.exists(member):
+            fp.quality_flags.append("no-processed-train")
+            return fp
+        rows = [_json.loads(line)
+                for line in pkg.source.read_text(member).splitlines()[:sample_rows]]
+        fp.sampled_rows = len(rows)
+        counts: dict[str, int] = {}
+        for r in rows:
+            if r.get("label"):
+                counts[str(r["label"])] = counts.get(str(r["label"]), 0) + 1
+        fp.target_classes = dict(sorted(counts.items(), key=lambda kv: -kv[1]))
+        if counts and min(counts.values()) / max(counts.values()) < 0.01:
+            fp.quality_flags.append("severe-class-imbalance")
+        return fp
+
     try:
         table = pkg.read_split("train", max_rows=sample_rows)
     except FileNotFoundError:

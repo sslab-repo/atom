@@ -4,6 +4,9 @@
 > implementation plan. Each milestone has an exit criterion — a thing that
 > demonstrably works — and CIC-IDS-2017 (the reference ADP) is the thread
 > through all of them.
+>
+> **Status (2026-07-14): M1–M5 complete; M6 data plane complete, foundation
+> adapters pending dependency approval — see [status.md](status.md).**
 
 ## Development workflow
 
