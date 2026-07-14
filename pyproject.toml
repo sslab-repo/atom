@@ -1,0 +1,28 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "atom-ai"
+version = "0.1.0.dev0"
+description = "ATOM (AuTO ai Machine) — modular AutoAI platform"
+readme = "README.md"
+requires-python = ">=3.10"
+authors = [{ name = "SSLab" }]
+dependencies = ["pyarrow>=15"]
+
+[project.optional-dependencies]
+dev = ["pytest>=8", "ruff>=0.4"]
+
+[project.scripts]
+atom = "atom.cli:main"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/atom"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
