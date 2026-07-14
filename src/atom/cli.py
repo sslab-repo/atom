@@ -21,7 +21,7 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     print(f"package    : {m.name}  [{m.manifest_version}]")
     print(f"id         : {fp.package_id[:19]}…")
     print(f"modality   : {fp.modality} / {fp.dataset_type}")
-    print(f"samples    : " + "  ".join(f"{s}={c:,}" for s, c in fp.counts.items()))
+    print("samples    : " + "  ".join(f"{s}={c:,}" for s, c in fp.counts.items()))
     print(f"columns    : {fp.n_columns}  (profiled {fp.sampled_rows:,} train rows)")
     roles = ", ".join(f"{k}={v}" for k, v in fp.roles.items() if v) or "(none declared)"
     print(f"roles      : {roles}")

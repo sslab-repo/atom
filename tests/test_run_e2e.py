@@ -43,7 +43,8 @@ def test_run_end_to_end(adp, tmp_path):
     run_doc = json.loads((run_dir / "provenance" / "run.json").read_text())
     assert run_doc["package"]["id"].startswith("sha256:")
     assert run_doc["task"]["family"] == "classification"
-    trials = [json.loads(l) for l in (run_dir / "provenance" / "trials.jsonl").read_text().splitlines()]
+    trials = [json.loads(line)
+              for line in (run_dir / "provenance" / "trials.jsonl").read_text().splitlines()]
     assert len(trials) == outcome.n_trials
     assert all("pipeline" in t and "cost_s" in t for t in trials)
     metrics = json.loads((run_dir / "metrics.json").read_text())

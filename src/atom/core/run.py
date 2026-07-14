@@ -6,10 +6,10 @@ from __future__ import annotations
 
 import time
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Callable
 
 from atom.contract import TaskFamily
-from atom.core.dataset import TabularMatrix, load_matrix
+from atom.core.dataset import load_matrix
 from atom.core.ensemble import greedy_ensemble
 from atom.core.evaluation import Evaluator
 from atom.core.ingest import Fingerprint, fingerprint
@@ -72,6 +72,22 @@ def run_package(
             progress(f"dropped {len(train.dropped)} non-feature columns "
                      f"({', '.join(list(train.dropped)[:6])}…)")
 
+        # Target came via override (not in manifest roles): resolve class
+        # count / imbalance / metric from the loaded training labels.
+        if (task.family is TaskFamily.CLASSIFICATION and task.n_classes is None
+                and train.y is not None):
+            import numpy as np
+
+            _, counts = np.unique(train.y.astype(str), return_counts=True)
+            task.n_classes = int(len(counts))
+            task.imbalanced = bool(counts.min() / counts.max() < 0.01)
+            task.primary_metric = "roc_auc" if task.n_classes == 2 else "f1_macro"
+            if task.imbalanced:
+                task.notes.append("severe class imbalance (observed at load)")
+            progress(f"resolved target: {task.n_classes} classes, "
+                     f"metric={task.primary_metric}"
+                     + (", imbalanced" if task.imbalanced else ""))
+
         evaluator = Evaluator(task, val)
         orch = Orchestrator(task, train, evaluator, budget, seed=seed)
         progress(f"searching: {len(orch.methods)} methods × preprocessing, "
@@ -82,10 +98,18 @@ def run_package(
         top = orch.best_trials(TOP_K)
         if not top:
             raise SystemExit("no successful trials within budget — increase --time-budget")
-        progress(f"finalizing: refitting top {len(top)} at full fidelity…")
+        progress(f"finalizing: up to {len(top)} candidates at full fidelity…")
         candidates, outputs = [], []
         for t in top:
-            fitted = fit_pipeline(t.spec, orch.modules, train, 1.0, seed=t.seed)
+            # Finalize honors the budget too: always produce >=1 candidate
+            # (never end without a usable artifact), stop adding more once
+            # the wall clock is spent.
+            if candidates and budget.elapsed >= wall_clock_s:
+                progress(f"budget reached — finalizing with {len(candidates)} candidate(s)")
+                break
+            fitted = orch.get_fitted(t.spec.key())  # reuse search-time fit
+            if fitted is None:
+                fitted = fit_pipeline(t.spec, orch.modules, train, 1.0, seed=t.seed)
             candidates.append(fitted)
             outputs.append(fitted.predict(val.X))
         singles = [evaluator.oriented(evaluator.score_predictions(val.y, o)) for o in outputs]

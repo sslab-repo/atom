@@ -134,7 +134,6 @@ def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
             type_votes[_classify_value(v)] += 1
             if len(distinct) <= 10_000:
                 distinct.add(str(v))
-        present = max(n - missing, 1)
         if type_votes["string"]:
             dtype = "string"
         elif type_votes["number"]:

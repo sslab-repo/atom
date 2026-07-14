@@ -65,6 +65,8 @@ class Orchestrator:
         self.batch_size = batch_size
         self.archive: list[Trial] = []
         self._next_id = 0
+        self._cost: dict[tuple[str, float], tuple[float, int]] = {}  # (method,fid)->(mean,n)
+        self._fitted_full: dict[str, tuple[float, Any]] = {}  # spec.key -> (score, fitted)
 
         self.methods: dict[str, Module] = {
             m.declares().name: m
@@ -114,6 +116,14 @@ class Orchestrator:
             fitted = fit_pipeline(spec, self.modules, self.train, fidelity, trial.seed)
             result = self.evaluator.evaluate(fitted, started)
             trial.score, trial.metrics, trial.cost_s = result.score, result.metrics, result.cost_s
+            key = (spec.method["name"], fidelity)
+            mean, n = self._cost.get(key, (0.0, 0))
+            self._cost[key] = ((mean * n + trial.cost_s) / (n + 1), n + 1)
+            if fidelity >= 1.0:  # keep fitted top candidates: finalize reuses, no refit
+                self._fitted_full[spec.key()] = (trial.score, fitted)
+                if len(self._fitted_full) > 5:
+                    worst = min(self._fitted_full, key=lambda k: self._fitted_full[k][0])
+                    del self._fitted_full[worst]
         except Exception:
             trial.status = "error"
             trial.error = traceback.format_exc(limit=3)
@@ -139,6 +149,8 @@ class Orchestrator:
                 for spec in survivors:
                     if self.budget.search_exhausted():
                         break
+                    if not self._affordable(spec.method["name"], fidelity):
+                        continue  # admission control: don't start what can't finish
                     results.append(self._run_trial(spec, fidelity))
                 ok = sorted(
                     (t for t in results if t.status == "ok"), key=lambda t: t.score, reverse=True
@@ -154,19 +166,40 @@ class Orchestrator:
                 survivors = [t.spec for t in ok[: max(1, len(ok) // REDUCTION)]]
         return self.archive
 
-    def best_trials(self, k: int, full_fidelity_only: bool = True) -> list[Trial]:
+    def _affordable(self, method_name: str, fidelity: float) -> bool:
+        """Estimated trial cost must fit the remaining search window.
+        Unknown costs are admitted (extrapolated from lower fidelity when
+        available) — the estimate improves as the archive grows."""
+        if fidelity >= 1.0 and not self._fitted_full:
+            return True  # always invest in one full-fidelity fit: finalize reuses it
+        remaining = self.budget.search_deadline_s - self.budget.elapsed
+        est = self._cost.get((method_name, fidelity))
+        if est is None:
+            lower = [(f, m) for (n, f), (m, _) in self._cost.items()
+                     if n == method_name and f < fidelity]
+            if not lower:
+                return True
+            f, m = max(lower)
+            est = (m * (fidelity / f), 1)
+        return est[0] <= remaining
+
+    def get_fitted(self, spec_key: str):
+        entry = self._fitted_full.get(spec_key)
+        return entry[1] if entry else None
+
+    def best_trials(self, k: int) -> list[Trial]:
+        """Top-k distinct pipelines by score, preferring higher-fidelity
+        evidence; lower-fidelity survivors fill remaining slots (they are
+        re-validated at full fidelity during finalize)."""
         seen: set[str] = set()
         out = []
-        max_f = max((t.fidelity for t in self.archive if t.status == "ok"), default=1.0)
         for t in sorted(
-            (t for t in self.archive if t.status == "ok"), key=lambda t: t.score, reverse=True
+            (t for t in self.archive if t.status == "ok"),
+            key=lambda t: (t.fidelity, t.score), reverse=True,
         ):
-            if full_fidelity_only and t.fidelity < max_f:
-                continue
             if t.spec.key() in seen:
                 continue
             seen.add(t.spec.key())
             out.append(t)
-            if len(out) == k:
-                break
-        return out
+        out.sort(key=lambda t: t.score, reverse=True)
+        return out[:k]
