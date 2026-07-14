@@ -1,0 +1,28 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.eggs/
+build/
+dist/
+.venv/
+venv/
+
+# Tooling
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Data & experiment artifacts (never commit datasets or model weights)
+data/
+*.ckpt
+*.pt
+*.onnx
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
+.claude/settings.local.json

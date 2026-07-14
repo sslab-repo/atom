@@ -1,0 +1,163 @@
+<svg viewBox="0 0 1240 820" xmlns="http://www.w3.org/2000/svg" font-family="'Segoe UI', system-ui, -apple-system, sans-serif">
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#334155"/>
+    </marker>
+    <marker id="arrowTeal" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#0d9488"/>
+    </marker>
+    <marker id="arrowAmber" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" fill="#b45309"/>
+    </marker>
+    <style>
+      .title   { font-size:28px; font-weight:700; fill:#0f172a; }
+      .sub     { font-size:14px; fill:#475569; }
+      .panelLbl{ font-size:15px; font-weight:700; }
+      .corebox { fill:#eef2ff; stroke:#4338ca; stroke-width:1.5; }
+      .hub     { fill:#e0e7ff; stroke:#4338ca; stroke-width:2.6; }
+      .coretxt { font-size:13px; font-weight:600; fill:#1e1b4b; text-anchor:middle; }
+      .coretxt small { font-size:11px; }
+      .tab     { fill:#0d9488; }
+      .tabtxt  { font-size:13px; font-weight:700; fill:#ffffff; text-anchor:middle; }
+      .card    { fill:#ffffff; stroke:#0d9488; stroke-width:1.3; }
+      .cardtxt { font-size:12px; fill:#134e4a; text-anchor:middle; }
+      .newcard { fill:#f1f5f9; stroke:#94a3b8; stroke-width:1.3; stroke-dasharray:5 4; }
+      .newtxt  { font-size:11.5px; font-weight:600; fill:#64748b; text-anchor:middle; }
+      .muted   { font-size:11px; fill:#64748b; }
+      .flowlbl { font-size:11.5px; font-weight:600; fill:#0d9488; }
+      .kbtxt   { font-size:12px; fill:#7c2d12; text-anchor:middle; }
+      .contractHdr { font-size:14px; font-weight:700; fill:#0f172a; }
+      .contractln  { font-size:12.5px; fill:#334155; }
+      .mono { font-family:'DejaVu Sans Mono',ui-monospace,monospace; }
+    </style>
+  </defs>
+
+  <rect width="1240" height="820" fill="#ffffff"/>
+
+  <!-- Title -->
+  <text x="30" y="42" class="title">ATOM</text>
+  <text x="132" y="42" class="title" fill="#4338ca">AuTO ai Machine</text>
+  <text x="30" y="64" class="sub">Modular AutoAI &#8212; a stable core wrapped by hot&#8209;swappable module registries. Any algorithm, old or newly published, is just a plug&#8209;in.</text>
+
+  <!-- ===================== CORE ENGINE ===================== -->
+  <rect x="25" y="82" width="1190" height="176" rx="10" fill="#f8fafc" stroke="#4338ca" stroke-width="1" stroke-dasharray="6 4"/>
+  <text x="40" y="106" class="panelLbl" fill="#4338ca">&#9312;  CORE ENGINE &#8212; frozen interfaces, rarely changes</text>
+  <text x="129" y="123" class="muted" text-anchor="middle">labeled or unlabeled &#183; any modality</text>
+
+  <!-- data in arrow -->
+  <line x1="8" y1="176" x2="38" y2="176" stroke="#334155" stroke-width="1.6" marker-end="url(#arrow)"/>
+
+  <!-- core boxes -->
+  <g>
+    <rect x="40"   y="130" width="178" height="92" rx="8" class="corebox"/>
+    <text class="coretxt" x="129" y="168">Ingest &amp; Profiler<tspan x="129" dy="18">build data</tspan><tspan x="129" dy="16" font-weight="700">fingerprint</tspan></text>
+
+    <rect x="236"  y="130" width="178" height="92" rx="8" class="corebox"/>
+    <text class="coretxt" x="325" y="162">Task Inference<tspan x="325" dy="17">decide objective /</tspan><tspan x="325" dy="16">task&#8209;DAG</tspan><tspan x="325" dy="16" fill="#b45309">&#9888; confirm gate</tspan></text>
+
+    <rect x="432"  y="130" width="178" height="92" rx="8" class="hub"/>
+    <text class="coretxt" x="521" y="162">Search<tspan x="521" dy="17" font-weight="700">Orchestrator</tspan><tspan x="521" dy="16">multi&#8209;fidelity</tspan><tspan x="521" dy="16">+ budget / bandit</tspan></text>
+
+    <rect x="628"  y="130" width="178" height="92" rx="8" class="corebox"/>
+    <text class="coretxt" x="717" y="162">Nested<tspan x="717" dy="17">Evaluation</tspan><tspan x="717" dy="16">leak&#8209;safe folds,</tspan><tspan x="717" dy="16">locked test set</tspan></text>
+
+    <rect x="824"  y="130" width="178" height="92" rx="8" class="corebox"/>
+    <text class="coretxt" x="913" y="170">Ensemble<tspan x="913" dy="18">&amp; Finalize</tspan><tspan x="913" dy="16">greedy over archive</tspan></text>
+
+    <rect x="1020" y="130" width="178" height="92" rx="8" class="corebox"/>
+    <text class="coretxt" x="1109" y="170">Model +<tspan x="1109" dy="18">Provenance</tspan><tspan x="1109" dy="16">out</tspan></text>
+  </g>
+
+  <!-- core flow arrows -->
+  <g stroke="#334155" stroke-width="1.6" marker-end="url(#arrow)">
+    <line x1="220" y1="176" x2="234" y2="176"/>
+    <line x1="416" y1="176" x2="430" y2="176"/>
+    <line x1="612" y1="176" x2="626" y2="176"/>
+    <line x1="808" y1="176" x2="822" y2="176"/>
+    <line x1="1004" y1="176" x2="1018" y2="176"/>
+  </g>
+
+  <!-- registries -> orchestrator arrow -->
+  <line x1="521" y1="286" x2="521" y2="224" stroke="#0d9488" stroke-width="2.2" marker-end="url(#arrowTeal)"/>
+  <text x="536" y="276" class="flowlbl">&#9650; modules discovered &amp; composed at runtime</text>
+  <text x="536" y="290" class="muted">inner loop:  preprocess &#215; method &#215; microcontrols</text>
+
+  <!-- ===================== REGISTRIES ===================== -->
+  <rect x="25" y="292" width="1190" height="316" rx="10" fill="#f0fdfa" stroke="#0d9488" stroke-width="1.3" stroke-dasharray="6 4"/>
+  <text x="40" y="316" class="panelLbl" fill="#0d9488">&#9313;  PLUGGABLE MODULE REGISTRIES &#8212; add or revise modules without touching the core</text>
+
+  <!-- Registry column A: Preprocessing -->
+  <g>
+    <rect x="45" y="330" width="255" height="30" rx="6" class="tab"/>
+    <text x="172" y="350" class="tabtxt">Preprocessing</text>
+    <rect x="45" y="368" width="255" height="36" rx="6" class="card"/><text x="172" y="391" class="cardtxt">Impute &#183; MICE / KNN</text>
+    <rect x="45" y="410" width="255" height="36" rx="6" class="card"/><text x="172" y="433" class="cardtxt">Scale &#183; robust / quantile</text>
+    <rect x="45" y="452" width="255" height="36" rx="6" class="card"/><text x="172" y="475" class="cardtxt">Balance &#183; SMOTE / ADASYN</text>
+    <rect x="45" y="502" width="255" height="36" rx="6" class="newcard"/><text x="172" y="525" class="newtxt">&#65291; new module &#8212; drop&#8209;in</text>
+  </g>
+
+  <!-- Registry column B: Methods -->
+  <g>
+    <rect x="335" y="330" width="255" height="30" rx="6" class="tab"/>
+    <text x="462" y="350" class="tabtxt">Methods &#8212; by task family</text>
+    <rect x="335" y="368" width="255" height="36" rx="6" class="card"/><text x="462" y="391" class="cardtxt">Classify &#183; Estimate</text>
+    <rect x="335" y="410" width="255" height="36" rx="6" class="card"/><text x="462" y="433" class="cardtxt">Cluster &#183; Reduce</text>
+    <rect x="335" y="452" width="255" height="36" rx="6" class="card"/><text x="462" y="475" class="cardtxt">Denoise &#183; Amplify &#183; Synthesize</text>
+    <rect x="335" y="502" width="255" height="36" rx="6" class="newcard"/><text x="462" y="525" class="newtxt">&#65291; new algorithm &#8212; drop&#8209;in</text>
+  </g>
+
+  <!-- Registry column C: Search Strategy -->
+  <g>
+    <rect x="625" y="330" width="255" height="30" rx="6" class="tab"/>
+    <text x="752" y="350" class="tabtxt">Search Strategy</text>
+    <rect x="625" y="368" width="255" height="36" rx="6" class="card"/><text x="752" y="391" class="cardtxt">BOHB / ASHA</text>
+    <rect x="625" y="410" width="255" height="36" rx="6" class="card"/><text x="752" y="433" class="cardtxt">TPE &#183; SMAC</text>
+    <rect x="625" y="452" width="255" height="36" rx="6" class="card"/><text x="752" y="475" class="cardtxt">Evolutionary &#183; TPOT</text>
+    <rect x="625" y="502" width="255" height="36" rx="6" class="newcard"/><text x="752" y="525" class="newtxt">&#65291; new optimizer &#8212; drop&#8209;in</text>
+  </g>
+
+  <!-- Registry column D: Metrics -->
+  <g>
+    <rect x="915" y="330" width="255" height="30" rx="6" class="tab"/>
+    <text x="1042" y="350" class="tabtxt">Metrics / Evaluators</text>
+    <rect x="915" y="368" width="255" height="36" rx="6" class="card"/><text x="1042" y="391" class="cardtxt">F1 / AUC / RMSE</text>
+    <rect x="915" y="410" width="255" height="36" rx="6" class="card"/><text x="1042" y="433" class="cardtxt">silhouette / ARI</text>
+    <rect x="915" y="452" width="255" height="36" rx="6" class="card"/><text x="1042" y="475" class="cardtxt">TSTR + privacy risk</text>
+    <rect x="915" y="502" width="255" height="36" rx="6" class="newcard"/><text x="1042" y="525" class="newtxt">&#65291; new metric &#8212; drop&#8209;in</text>
+  </g>
+
+  <text x="40" y="565" class="muted">Each registry is an independent, versioned package &#183; diversity constraint keeps portfolios from collapsing to near&#8209;duplicates.</text>
+  <text x="40" y="586" class="muted">Task Inference reads Methods + Metrics to attach an evaluable objective &#183; Orchestrator draws from all four during the inner loop.</text>
+
+  <!-- ===================== BOTTOM: Meta-KB + Contract ===================== -->
+
+  <!-- Meta-KB cylinder -->
+  <g>
+    <path d="M55 660 a125 18 0 0 1 250 0 v92 a125 18 0 0 1 -250 0 z" fill="#fef3c7" stroke="#b45309" stroke-width="1.5"/>
+    <path d="M55 660 a125 18 0 0 0 250 0" fill="none" stroke="#b45309" stroke-width="1.5"/>
+    <text x="180" y="700" class="kbtxt" font-weight="700">Meta&#8209;Knowledge Base</text>
+    <text x="180" y="720" class="kbtxt">fingerprint &#8594; winning config,</text>
+    <text x="180" y="736" class="kbtxt">score &amp; cost  &#8212;  the flywheel</text>
+  </g>
+
+  <!-- KB feedback arrows -->
+  <path d="M180 658 C 180 620, 300 610, 325 592" fill="none" stroke="#b45309" stroke-width="1.6" stroke-dasharray="5 3" marker-end="url(#arrowAmber)"/>
+  <text x="196" y="628" class="muted" fill="#b45309">&#8593; warm&#8209;starts every new run</text>
+
+  <path d="M913 224 C 913 250, 340 250, 250 656" fill="none" stroke="#b45309" stroke-width="1.4" stroke-dasharray="4 3" opacity="0.55"/>
+  <text x="300" y="644" class="muted" fill="#b45309" opacity="0.9">store results &#8595;</text>
+
+  <!-- Module Contract box -->
+  <g>
+    <rect x="360" y="628" width="850" height="164" rx="10" fill="#ffffff" stroke="#4338ca" stroke-width="1.6"/>
+    <text x="380" y="654" class="contractHdr">&#9314;  MODULE CONTRACT &#8212; the single interface that makes ATOM pluggable</text>
+    <text x="384" y="682" class="contractln"><tspan class="mono" fill="#4338ca">declares()</tspan>  &#8594; task families + data modalities the module supports</text>
+    <text x="384" y="706" class="contractln"><tspan class="mono" fill="#4338ca">space()</tspan>     &#8594; hyperparameter / &#8220;microcontrol&#8221; ranges (conditional OK)</text>
+    <text x="384" y="730" class="contractln"><tspan class="mono" fill="#4338ca">run()</tspan>       &#8594; fit &#183; transform &#183; generate &#183; score</text>
+    <text x="384" y="754" class="contractln"><tspan class="mono" fill="#4338ca">hints()</tspan>     &#8594; cpu | gpu:1 &#183; fidelity levels for multi&#8209;fidelity search</text>
+    <rect x="360" y="766" width="850" height="26" rx="0" fill="#eef2ff"/>
+    <rect x="360" y="766" width="850" height="26" fill="#eef2ff"/>
+    <text x="380" y="784" class="contractln" font-weight="700" fill="#4338ca">New research  &#8594;  &#9312; implement the contract   &#9313; drop into a registry   &#9314; auto&#8209;discovered &#8212; core untouched</text>
+  </g>
+
+</svg>
