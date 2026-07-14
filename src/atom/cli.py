@@ -44,6 +44,46 @@ def _cmd_inspect(args: argparse.Namespace) -> int:
     return 0
 
 
+def _confirm_gate(task, fp, assume_yes: bool) -> bool:
+    print("=== inferred task (confirm gate) ===")
+    print(f"  family   : {task.family.value}"
+          + (f" / {task.setting.value}" if task.setting else ""))
+    print(f"  target   : {task.target}   metric: {task.primary_metric}"
+          + (f"   classes: {task.n_classes}" if task.n_classes else ""))
+    if task.imbalanced:
+        print("  note     : severe class imbalance (rare-class classification)")
+    for n in task.notes:
+        print(f"  note     : {n}")
+    if assume_yes or not sys.stdin.isatty():
+        print("  proceeding (--yes)")
+        return True
+    return input("proceed with this task? [y/N] ").strip().lower() in ("y", "yes")
+
+
+def _cmd_run(args: argparse.Namespace) -> int:
+    from atom.core.run import run_package
+
+    outcome = run_package(
+        args.package,
+        target=args.target,
+        wall_clock_s=args.time_budget,
+        max_trials=args.max_trials,
+        min_trials=args.min_trials,
+        max_rows=args.max_rows,
+        out_root=args.out,
+        seed=args.seed,
+        confirm=lambda task, fp: _confirm_gate(task, fp, args.yes),
+        progress=lambda s: print(f"  {s}"),
+    )
+    print("=== result ===")
+    print(f"  final    : {outcome.final_kind}   trials: {outcome.n_trials}"
+          f"   elapsed: {outcome.elapsed_s:.0f}s")
+    print(f"  val      : {outcome.task.primary_metric}={abs(outcome.val_score):.4f}")
+    print("  test     : " + "  ".join(f"{k}={v:.4f}" for k, v in outcome.test_metrics.items()))
+    print(f"  artifacts: {outcome.run_dir}")
+    return 0
+
+
 def _cmd_pack(args: argparse.Namespace) -> int:
     from atom.data import pack_csv
 
@@ -62,6 +102,18 @@ def main(argv: list[str] | None = None) -> int:
     p_inspect.add_argument("--sample-rows", type=int, default=50_000)
     p_inspect.add_argument("--columns", type=int, default=12, help="max columns to display")
     p_inspect.set_defaults(func=_cmd_inspect)
+
+    p_run = sub.add_parser("run", help="AutoAI run: package -> trained model + provenance")
+    p_run.add_argument("package")
+    p_run.add_argument("--target", help="target column (overrides/completes manifest roles)")
+    p_run.add_argument("--time-budget", type=float, default=120.0, metavar="SECONDS")
+    p_run.add_argument("--max-trials", type=int)
+    p_run.add_argument("--min-trials", type=int)
+    p_run.add_argument("--max-rows", type=int, default=100_000)
+    p_run.add_argument("--out", default="runs")
+    p_run.add_argument("--seed", type=int, default=0)
+    p_run.add_argument("--yes", "-y", action="store_true", help="skip the confirm gate")
+    p_run.set_defaults(func=_cmd_run)
 
     p_pack = sub.add_parser("pack", help="convert a loose CSV into an ATOM Dataset Package")
     p_pack.add_argument("csv")

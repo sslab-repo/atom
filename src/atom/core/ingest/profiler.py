@@ -18,6 +18,21 @@ INF_SENTINELS = {"Infinity", "-Infinity", "inf", "-inf", "Inf"}
 FINGERPRINT_VERSION = "fingerprint-v1"
 
 
+def column_to_pylist(col) -> list:
+    """Arrow column -> python list, tolerating invalid UTF-8 in string data
+    (seen in the wild: Windows-1252 bytes inside DMS parquet). Bad bytes are
+    replaced, never fatal."""
+    try:
+        return col.to_pylist()
+    except UnicodeDecodeError:
+        import pyarrow as pa
+
+        def _decode(v):
+            return v.decode("utf-8", "replace") if isinstance(v, bytes) else v
+
+        return [_decode(v) for v in col.cast(pa.binary()).to_pylist()]
+
+
 @dataclass
 class ColumnProfile:
     name: str
@@ -104,7 +119,7 @@ def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
     fp.sampled_rows = table.num_rows
     id_col = m.roles.id
     for col_name in table.column_names:
-        values = table.column(col_name).to_pylist()
+        values = column_to_pylist(table.column(col_name))
         n = len(values)
         missing = inf = 0
         type_votes: dict[str, int] = {"integer": 0, "number": 0, "string": 0}
@@ -143,7 +158,7 @@ def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
     for target in m.roles.target:
         if target in table.column_names:
             counts: dict[str, int] = {}
-            for v in table.column(target).to_pylist():
+            for v in column_to_pylist(table.column(target)):
                 key = "" if v is None else str(v)
                 counts[key] = counts.get(key, 0) + 1
             fp.target_classes = dict(sorted(counts.items(), key=lambda kv: -kv[1]))

@@ -9,10 +9,12 @@ description = "ATOM (AuTO ai Machine) — modular AutoAI platform"
 readme = "README.md"
 requires-python = ">=3.10"
 authors = [{ name = "SSLab" }]
-dependencies = ["pyarrow>=15"]
+dependencies = ["pyarrow>=15", "numpy>=1.24", "scikit-learn>=1.4"]
 
 [project.optional-dependencies]
 dev = ["pytest>=8", "ruff>=0.4"]
+boosted = ["xgboost>=2", "lightgbm>=4"]
+imbalanced = ["imbalanced-learn>=0.12"]
 
 [project.scripts]
 atom = "atom.cli:main"
