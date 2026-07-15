@@ -96,6 +96,15 @@ atom/
     └── diagrams/                # architecture diagrams
 ```
 
+## Installation
+
+```bash
+bash scripts/install.sh   # RHEL 10 (user account, bash) & macOS (zsh)
+```
+
+Self-contained under `~/atom` — sources, venv, config, data, runs, meta-KB.
+Details: [`docs/install.md`](docs/install.md).
+
 ## Status
 
 **Design phase complete (2026-07-14) — implementation starting.**
