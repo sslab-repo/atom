@@ -28,9 +28,10 @@ class EvalResult:
 
 
 class Evaluator:
-    def __init__(self, spec: TaskSpec, val: TabularMatrix):
+    def __init__(self, spec: TaskSpec, val: TabularMatrix, cv_folds: int = 0):
         self.spec = spec
         self.val = val
+        self.cv_folds = cv_folds  # >0: small-data mode, k-fold CV over train
         evaluators = find(ModuleKind.METRIC, spec.family, spec.modality)
         if not evaluators:
             raise RuntimeError(f"no metric module for {spec.family.value}")
@@ -57,3 +58,46 @@ class Evaluator:
         return EvalResult(
             score=self.oriented(metrics), metrics=metrics, cost_s=time.monotonic() - started
         )
+
+    def evaluate_spec(self, spec, modules, train: TabularMatrix, fidelity: float,
+                      seed: int) -> tuple[EvalResult, Any]:
+        """Fit + evaluate one candidate. Returns (result, fitted-or-None).
+
+        Small-data mode (cv_folds > 0): k-fold CV over TRAIN — selection on a
+        tiny fixed val split overfits it (measured: 485 trials on 77 val rows,
+        val 0.933 vs test 0.853); fold-mean scores restore honest ranking."""
+        from atom.core.orchestrator.pipeline import fit_pipeline  # runtime: avoids import cycle
+
+        started = time.monotonic()
+        if not self.cv_folds:
+            fitted = fit_pipeline(spec, modules, train, fidelity, seed)
+            return self.evaluate(fitted, started), fitted
+
+        import numpy as np
+        from sklearn.model_selection import KFold, StratifiedKFold
+
+        y_str = train.y.astype(str) if train.y is not None else None
+        try:
+            splitter = (StratifiedKFold(self.cv_folds, shuffle=True, random_state=seed)
+                        if y_str is not None else
+                        KFold(self.cv_folds, shuffle=True, random_state=seed))
+            folds = list(splitter.split(train.X, y_str))
+        except ValueError:  # e.g. a class with < k members
+            splitter = KFold(self.cv_folds, shuffle=True, random_state=seed)
+            folds = list(splitter.split(train.X))
+        all_metrics: dict[str, list[float]] = {}
+        for tr_idx, ho_idx in folds:
+            sub = TabularMatrix(X=train.X[tr_idx],
+                                y=train.y[tr_idx] if train.y is not None else None,
+                                features=train.features)
+            fitted = fit_pipeline(spec, modules, sub, fidelity, seed)
+            outputs = fitted.predict(train.X[ho_idx])
+            fold_metrics = self.score_predictions(
+                train.y[ho_idx] if train.y is not None else None,
+                outputs, X=train.X[ho_idx])
+            for k, v in fold_metrics.items():
+                all_metrics.setdefault(k, []).append(v)
+        metrics = {k: float(np.mean(v)) for k, v in all_metrics.items()}
+        result = EvalResult(score=self.oriented(metrics), metrics=metrics,
+                            cost_s=time.monotonic() - started)
+        return result, None  # no single fitted pipeline in CV mode

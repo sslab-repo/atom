@@ -115,11 +115,17 @@ def run_package(
         neighbors = kb.nearest(summary)
         warm_specs = [PipelineSpec(**n["best_pipeline"]) for n in neighbors]
         if neighbors:
+            prior_metric = neighbors[0].get("metric") or "score"
             progress(f"meta-KB: warm-starting from {len(neighbors)} similar run(s), "
-                     f"best prior {task.primary_metric}≈{abs(neighbors[0]['val_score']):.3f}, "
+                     f"best prior {prior_metric}≈{abs(neighbors[0]['val_score']):.3f}, "
                      f"cost≈{neighbors[0]['cost_s']:.0f}s")
 
-        evaluator = Evaluator(task, val)
+        cv_folds = 3 if val.n < 1000 else 0  # small-data mode (locked default)
+        if cv_folds:
+            progress(f"small-data mode: {cv_folds}-fold CV scoring "
+                     f"(val split has only {val.n} rows)")
+            task.notes.append(f"small-data: {cv_folds}-fold CV used for trial scoring")
+        evaluator = Evaluator(task, val, cv_folds=cv_folds)
         orch = Orchestrator(task, train, evaluator, budget, seed=seed, warm_specs=warm_specs,
                     include_experimental=include_experimental)
         progress(f"searching: {len(orch.methods)} methods × preprocessing, "
@@ -136,7 +142,11 @@ def run_package(
             # Finalize honors the budget too: always produce >=1 candidate
             # (never end without a usable artifact), stop adding more once
             # the wall clock is spent.
-            if candidates and budget.elapsed >= wall_clock_s:
+            est = orch.trial_cost_estimate(t.spec.method["name"], 1.0)
+            over = (budget.elapsed >= wall_clock_s
+                    or (est is not None and orch.get_fitted(t.spec.key()) is None
+                        and budget.elapsed + est > wall_clock_s * 1.05))
+            if candidates and over:
                 progress(f"budget reached — finalizing with {len(candidates)} candidate(s)")
                 break
             try:
@@ -247,7 +257,7 @@ def run_package(
         best_spec = (kept[best_single_idx].spec if not use_ensemble
                      else kept[max(set(ensemble.members), key=ensemble.members.count)].spec)
         kb.append(summary, pkg.manifest.content_id, best_spec.to_dict(),
-                  val_score, test_metrics, budget.elapsed)
+                  val_score, test_metrics, budget.elapsed, metric=task.primary_metric)
 
         return RunOutcome(
             run_dir=str(writer.dir), task=task, final_kind=final_kind, val_score=val_score,

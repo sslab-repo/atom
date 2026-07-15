@@ -53,7 +53,8 @@ class MetaKB:
 
     def append(self, summary: dict[str, Any], package_id: str,
                best_pipeline: dict[str, Any], val_score: float,
-               test_metrics: dict[str, float], cost_s: float) -> None:
+               test_metrics: dict[str, float], cost_s: float,
+               metric: str = "") -> None:
         self.root.mkdir(parents=True, exist_ok=True)
         record = {
             "version": RECORD_VERSION,
@@ -61,6 +62,7 @@ class MetaKB:
             "summary": summary,
             "package_id": package_id,
             "best_pipeline": best_pipeline,
+            "metric": metric,
             "val_score": val_score,
             "test": test_metrics,
             "cost_s": round(cost_s, 1),
@@ -81,10 +83,14 @@ class MetaKB:
                 continue  # tolerate a torn append
         return out
 
-    def nearest(self, summary: dict[str, Any], k: int = 3) -> list[dict[str, Any]]:
-        """Closest same-family/modality records, best first (warm-starts)."""
+    def nearest(self, summary: dict[str, Any], k: int = 3,
+                max_distance: float = 2.0) -> list[dict[str, Any]]:
+        """Closest same-family/modality records within max_distance, best
+        first. The cutoff keeps wildly dissimilar datasets from diluting
+        warm-starts (a 768-row clinic table is no prior for 3M flows)."""
         pool = [r for r in self.records()
                 if r["summary"]["family"] == summary["family"]
-                and r["summary"]["modality"] == summary["modality"]]
+                and r["summary"]["modality"] == summary["modality"]
+                and _distance(r["summary"], summary) <= max_distance]
         pool.sort(key=lambda r: (_distance(r["summary"], summary), -r["val_score"]))
         return pool[:k]

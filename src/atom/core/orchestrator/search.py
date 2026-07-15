@@ -18,7 +18,7 @@ from atom.contract import Modality, Module, ModuleKind
 from atom.core.dataset import TabularMatrix
 from atom.core.evaluation import Evaluator
 from atom.core.orchestrator.budget import Budget
-from atom.core.orchestrator.pipeline import PipelineSpec, fit_pipeline, sample_config
+from atom.core.orchestrator.pipeline import PipelineSpec, sample_config
 from atom.core.task_inference import TaskSpec
 from atom.registries import find
 
@@ -117,13 +117,13 @@ class Orchestrator:
         self._next_id += 1
         started = time.monotonic()
         try:
-            fitted = fit_pipeline(spec, self.modules, self.train, fidelity, trial.seed)
-            result = self.evaluator.evaluate(fitted, started)
+            result, fitted = self.evaluator.evaluate_spec(
+                spec, self.modules, self.train, fidelity, trial.seed)
             trial.score, trial.metrics, trial.cost_s = result.score, result.metrics, result.cost_s
             key = (spec.method["name"], fidelity)
             mean, n = self._cost.get(key, (0.0, 0))
             self._cost[key] = ((mean * n + trial.cost_s) / (n + 1), n + 1)
-            if fidelity >= 1.0:  # keep fitted top candidates: finalize reuses, no refit
+            if fidelity >= 1.0 and fitted is not None:  # finalize reuses, no refit
                 self._fitted_full[spec.key()] = (trial.score, fitted)
                 if len(self._fitted_full) > 5:
                     worst = min(self._fitted_full, key=lambda k: self._fitted_full[k][0])
@@ -191,6 +191,17 @@ class Orchestrator:
             f, m = max(lower)
             est = (m * (fidelity / f), 1)
         return est[0] <= remaining
+
+    def trial_cost_estimate(self, method_name: str, fidelity: float) -> float | None:
+        est = self._cost.get((method_name, fidelity))
+        if est:
+            return est[0]
+        lower = [(f, m) for (n, f), (m, _) in self._cost.items()
+                 if n == method_name and f < fidelity]
+        if lower:
+            f, m = max(lower)
+            return m * (fidelity / f)
+        return None
 
     def get_fitted(self, spec_key: str):
         entry = self._fitted_full.get(spec_key)
