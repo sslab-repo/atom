@@ -49,12 +49,22 @@ def _to_float(v) -> float:
         return math.nan
 
 
-def select_features(fp: Fingerprint, target: str | None) -> tuple[list[str], dict[str, str]]:
-    """Numeric feature columns, with drop reasons for the rest."""
+MAX_ONEHOT_COLUMNS = 256
+
+
+def select_features(
+    fp: Fingerprint, target: str | None
+) -> tuple[list[str], dict[str, list[str]], dict[str, str]]:
+    """(numeric_features, {categorical: vocabulary}, dropped).
+
+    Categorical vocabularies come from the fingerprint, which profiles the
+    TRAIN split only — one-hot expansion against them is leak-free. Total
+    expanded width is capped; overflow columns are dropped with a reason."""
     roles = fp.roles
     ignore = set(roles.get("ignore") or [])
     id_col = roles.get("id")
-    features, dropped = [], {}
+    features, categorical, dropped = [], {}, {}
+    budget = MAX_ONEHOT_COLUMNS
     for col in fp.columns:
         if col.name == target:
             continue
@@ -63,10 +73,16 @@ def select_features(fp: Fingerprint, target: str | None) -> tuple[list[str], dic
         elif col.name in ignore:
             dropped[col.name] = "role:ignore"
         elif col.dtype == "string":
-            dropped[col.name] = "non-numeric (M2 numeric-only)"
+            if col.categories and len(col.categories) <= budget:
+                categorical[col.name] = col.categories
+                budget -= len(col.categories)
+            elif col.categories:
+                dropped[col.name] = "one-hot budget exceeded"
+            else:
+                dropped[col.name] = "high-cardinality string"
         else:
             features.append(col.name)
-    return features, dropped
+    return features, categorical, dropped
 
 
 def load_matrix(
@@ -79,8 +95,9 @@ def load_matrix(
 ) -> TabularMatrix:
     import pyarrow.parquet as pq
 
-    features, dropped = select_features(fp, target)
-    columns = features + ([target] if target else [])
+    features, categorical, dropped = select_features(fp, target)
+    onehot_names = [f"{c}={v}" for c, vocab in categorical.items() for v in vocab]
+    columns = features + list(categorical) + ([target] if target else [])
     member = pkg.processed_member(split)
 
     with pkg.source.open(member) as fh:
@@ -100,7 +117,7 @@ def load_matrix(
             chunks.append(batch.take(idx))
 
     n = sum(c.num_rows for c in chunks)
-    X = np.empty((n, len(features)), dtype=np.float64)
+    X = np.empty((n, len(features) + len(onehot_names)), dtype=np.float64)
     for j, name in enumerate(features):
         pos = 0
         for chunk in chunks:
@@ -112,6 +129,22 @@ def load_matrix(
                 arr = np.array([_to_float(v) for v in column_to_pylist(col)], dtype=np.float64)
             X[pos : pos + len(arr), j] = arr
             pos += len(arr)
+    j = len(features)
+    for cname, vocab in categorical.items():
+        index = {v: i for i, v in enumerate(vocab)}
+        pos = 0
+        for chunk in chunks:
+            col = chunk.column(chunk.schema.get_field_index(cname))
+            vals = ["" if v is None else str(v).strip() for v in column_to_pylist(col)]
+            block = np.zeros((len(vals), len(vocab)), dtype=np.float64)
+            for r, v in enumerate(vals):
+                i = index.get(v)
+                if i is not None:
+                    block[r, i] = 1.0
+                # unseen/missing category -> all-zeros row (leak-free default)
+            X[pos : pos + len(vals), j : j + len(vocab)] = block
+            pos += len(vals)
+        j += len(vocab)
 
     y = None
     if target:
@@ -121,4 +154,4 @@ def load_matrix(
             parts.extend("" if v is None else str(v).strip() for v in column_to_pylist(col))
         y = np.array(parts, dtype=object)
 
-    return TabularMatrix(X=X, y=y, features=features, dropped=dropped)
+    return TabularMatrix(X=X, y=y, features=features + onehot_names, dropped=dropped)

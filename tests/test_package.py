@@ -91,3 +91,25 @@ def test_lazy_checksum_verify_detects_tamper(adp_folder, tmp_path):
         pkg.verify("processed/val.parquet")  # untouched member passes
         with pytest.raises(ChecksumMismatch):
             pkg.verify(member)
+
+
+def test_categorical_onehot_expansion(tmp_path):
+    import csv as _csv
+
+    from atom.core.dataset import load_matrix
+    from atom.core.ingest import fingerprint as _fingerprint
+
+    src = tmp_path / "cats.csv"
+    with src.open("w", newline="") as fh:
+        w = _csv.writer(fh)
+        w.writerow(["num", "color", "label"])
+        for i in range(300):
+            w.writerow([str(i * 1.5), ["red", "green", "blue"][i % 3], "a" if i % 2 else "b"])
+    adp = pack_csv(src, tmp_path, name="cats", target="label")
+    with DatasetPackage.open(adp) as pkg:
+        fp = _fingerprint(pkg)
+        m = load_matrix(pkg, fp, "train", "label")
+    assert "num" in m.features
+    assert {"color=blue", "color=green", "color=red"} <= set(m.features)
+    j = m.features.index("color=red")
+    assert set(m.X[:, j]) <= {0.0, 1.0} and m.X[:, j].sum() > 0

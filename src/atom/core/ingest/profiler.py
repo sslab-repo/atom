@@ -40,6 +40,7 @@ class ColumnProfile:
     missing_rate: float = 0.0
     inf_rate: float = 0.0
     distinct_sampled: int = 0
+    categories: list[str] = field(default_factory=list)  # small string vocabularies
 
 
 @dataclass
@@ -168,6 +169,8 @@ def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
                 missing_rate=round(missing / n, 6) if n else 0.0,
                 inf_rate=round(inf / n, 6) if n else 0.0,
                 distinct_sampled=len(distinct),
+                categories=(sorted(distinct) if dtype == "string"
+                            and 0 < len(distinct) <= 64 and col_name != id_col else []),
             )
         )
         if inf and col_name != id_col:
