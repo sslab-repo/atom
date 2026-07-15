@@ -153,6 +153,7 @@ class Orchestrator:
                 self._warm = []
             self.rng.shuffle(method_names)
             survivors = specs
+            batch_admitted = 0
             for rung, fidelity in enumerate(rung_fidelities):
                 results = []
                 for spec in survivors:
@@ -161,6 +162,7 @@ class Orchestrator:
                     if not self._affordable(spec.method["name"], fidelity):
                         continue  # admission control: don't start what can't finish
                     results.append(self._run_trial(spec, fidelity))
+                batch_admitted += len(results)
                 ok = sorted(
                     (t for t in results if t.status == "ok"), key=lambda t: t.score, reverse=True
                 )
@@ -173,6 +175,8 @@ class Orchestrator:
                 if rung == len(rung_fidelities) - 1 or not ok:
                     break
                 survivors = [t.spec for t in ok[: max(1, len(ok) // REDUCTION)]]
+            if batch_admitted == 0:  # nothing affordable anymore: stop, don't spin
+                break
         return self.archive
 
     def _affordable(self, method_name: str, fidelity: float) -> bool:

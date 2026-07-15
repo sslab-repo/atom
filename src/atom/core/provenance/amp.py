@@ -246,6 +246,7 @@ def export_amp(
     is_classifier: bool,
     agreement_min: float | None = None,
     sample_y=None,
+    should_stop=None,  # callable -> True when the run budget is exhausted
 ) -> dict[str, Any]:
     """Write model/ + manifest.json into run_dir. Returns the manifest."""
     model_dir = run_dir / "model"
@@ -255,6 +256,12 @@ def export_amp(
     graphs, parities, deployable = [], [], True
     for idx in member_ids:
         name = "pipeline.onnx" if len(member_ids) == 1 else f"member_{idx}.onnx"
+        if should_stop is not None and graphs and should_stop():
+            # ONNX conversion of large ensembles is expensive; past the
+            # budget we stop converting further members and say so.
+            deployable = False
+            parities.append({"graph": name, "pass": False, "skipped": "budget"})
+            continue
         try:
             pipeline = _sklearn_pipeline(candidates[idx])
             onnx_bytes = _convert(pipeline, len(features))

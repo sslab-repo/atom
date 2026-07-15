@@ -82,13 +82,25 @@ def run_package(
                                 include_experimental, seed, progress, started)
 
         budget = Budget(wall_clock_s=wall_clock_s, max_trials=max_trials, min_trials=min_trials)
+        phases: dict[str, float] = {}
         progress(f"loading train/val (max {max_rows:,} train rows)…")
         train = load_matrix(pkg, fp, "train", task.target, max_rows=max_rows, seed=seed)
         val = load_matrix(pkg, fp, "val", task.target, max_rows=max(max_rows // 2, 10_000),
                           seed=seed + 1)
+        phases["load_s"] = round(budget.elapsed, 1)
         if train.dropped:
             progress(f"dropped {len(train.dropped)} non-feature columns "
                      f"({', '.join(list(train.dropped)[:6])}…)")
+        if not train.features:
+            raise SystemExit(
+                "no usable features — every column was dropped "
+                f"({', '.join(f'{k}: {v}' for k, v in list(train.dropped.items())[:5])}…). "
+                "Text/high-cardinality data needs the M6 foundation modules.")
+
+        leaks = _leak_screen(train, task)
+        for warning in leaks:
+            task.notes.append(warning)
+            progress(f"WARNING {warning}")
 
         # Target came via override (not in manifest roles): resolve class
         # count / imbalance / metric from the loaded training labels.
@@ -131,9 +143,13 @@ def run_package(
         progress(f"searching: {len(orch.methods)} methods × preprocessing, "
                  f"budget {wall_clock_s:.0f}s" + (f" / {max_trials} trials" if max_trials else ""))
         orch.run(progress=progress)
+        phases["search_s"] = round(budget.elapsed - phases["load_s"], 1)
 
         # Finalize inside the reserved tail: refit top-K at full fidelity.
-        top = orch.best_trials(TOP_K)
+        # BUG-2: breadth adapts to what is left of the budget — load/search
+        # already consumed their share.
+        top_k = TOP_K if budget.elapsed < wall_clock_s * 0.9 else 2
+        top = orch.best_trials(top_k)
         if not top:
             raise SystemExit("no successful trials within budget — increase --time-budget")
         progress(f"finalizing: up to {len(top)} candidates at full fidelity…")
@@ -164,12 +180,13 @@ def run_package(
                    for o in outputs]
         best_single_idx = max(range(len(singles)), key=singles.__getitem__)
 
-        if task.family in SUPERVISED:
+        if task.family in SUPERVISED and budget.elapsed < wall_clock_s:
             ensemble, ens_score = greedy_ensemble(evaluator, outputs, val.y)
             use_ensemble = (ens_score > singles[best_single_idx]
                             and len(set(ensemble.members)) > 1)
-        else:  # clustering: labels aren't comparable across models — no ensembling
+        else:  # clustering (labels not comparable) or budget spent: best single
             ensemble, use_ensemble = None, False
+        phases["finalize_s"] = round(budget.elapsed - phases["load_s"] - phases["search_s"], 1)
 
         # LOCKED test set: read once, here, for the final report only.
         test = load_matrix(pkg, fp, "test", task.target, max_rows=max(max_rows // 2, 10_000),
@@ -201,6 +218,8 @@ def run_package(
                        "min_trials": min_trials},
             "data": {"train_rows": train.n, "val_rows": val.n, "test_rows": test.n,
                      "features": len(train.features), "dropped": train.dropped},
+            "phases": phases,
+            "leak_warnings": leaks,
             "seed": seed,
         })
         for t in orch.archive:
@@ -247,7 +266,11 @@ def run_package(
                 "atom_run": writer.dir.name,
             },
             is_classifier=task.family is not TaskFamily.REGRESSION,
+            should_stop=lambda: budget.elapsed > wall_clock_s * 1.2,
         )
+        phases["export_s"] = round(
+            budget.elapsed - sum(phases.values()), 1)
+        progress("phases: " + "  ".join(f"{k}={v}s" for k, v in phases.items()))
         progress(f"AMP: deployable={amp['deployable']} "
                  f"({len(amp['graphs'])} ONNX graph(s), parity "
                  f"{'ok' if all(p.get('pass') for p in amp['parity']) else 'FAILED'})")
@@ -264,6 +287,37 @@ def run_package(
             test_metrics=test_metrics, n_trials=len(orch.archive),
             elapsed_s=time.monotonic() - started,
         )
+
+
+def _leak_screen(train, task, max_sample: int = 20_000, r_threshold: float = 0.98) -> list[str]:
+    """Cheap target-leakage screen: flag features almost perfectly correlated
+    with the target (measured need: szeged-weather 'Apparent Temperature',
+    bank-churn precomputed Naive_Bayes columns both trained to 1.000 silently)."""
+    import numpy as np
+
+    if train.y is None or train.n < 50:
+        return []
+    n = min(train.n, max_sample)
+    if task.family is TaskFamily.REGRESSION:
+        try:
+            yv = train.y[:n].astype(float)
+        except (TypeError, ValueError):
+            return []
+    else:
+        classes = np.unique(train.y[:n].astype(str))
+        if len(classes) != 2:
+            return []
+        yv = (train.y[:n].astype(str) == classes[-1]).astype(float)
+    flags = []
+    for j, name in enumerate(train.features):
+        xj = train.X[:n, j]
+        mask = np.isfinite(xj)
+        if mask.sum() < 50 or np.std(xj[mask]) == 0 or np.std(yv[mask]) == 0:
+            continue
+        r = abs(float(np.corrcoef(xj[mask], yv[mask])[0, 1]))
+        if r >= r_threshold:
+            flags.append(f"possible-target-leakage: '{name}' (|r|={r:.3f})")
+    return flags
 
 
 def _run_anomaly(pkg, fp, task, wall_clock_s, max_rows, out_root,
