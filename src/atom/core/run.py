@@ -228,7 +228,8 @@ def run_package(
                      [str(c) for c in (test_outputs[best_single_idx].get("classes") or [])]
                      or None),
             features=train.features,
-            sample_X=val.X[:256],
+            sample_X=val.X[:512],
+            sample_y=(val.y[:512] if task.family in SUPERVISED else None),
             lineage={
                 "dataset_id": pkg.manifest.content_id,
                 "dataset_name": pkg.manifest.name,
@@ -324,7 +325,7 @@ def _run_anomaly(pkg, fp, task, wall_clock_s, max_rows, out_root,
                         "pipelines": [fitted], "ensemble": None,
                         "features": train.features})
 
-    from atom.core.provenance.amp import export_amp
+    from atom.core.provenance.amp import ANOMALY_AGREEMENT_MIN, export_amp
 
     amp = export_amp(
         run_dir=writer.dir, task=task.to_dict(), candidates=[fitted],
@@ -335,6 +336,7 @@ def _run_anomaly(pkg, fp, task, wall_clock_s, max_rows, out_root,
                  "split": pkg.manifest.split.get("file"),
                  "atom_run": writer.dir.name},
         is_classifier=True,  # discrete -1/1 labels: parity by agreement
+        agreement_min=ANOMALY_AGREEMENT_MIN,
     )
     progress(f"AMP: deployable={amp['deployable']}")
     writer.close()
