@@ -91,6 +91,11 @@ def infer(
         family = TaskFamily.REGRESSION
 
     spec = TaskSpec(family=family, modality=modality, target=target, notes=notes)
+    if (family is TaskFamily.CLASSIFICATION and profile is not None
+            and profile.dtype in ("integer", "number")
+            and 10 < profile.distinct_sampled <= CLASSIFICATION_MAX_NUMERIC_CLASSES):
+        notes.append(f"integer target with {profile.distinct_sampled} levels — "
+                     "if ordinal (grades, ratings), consider --task regression")
     if family is TaskFamily.CLASSIFICATION:
         spec.n_classes = len(classes) or None
         if classes:

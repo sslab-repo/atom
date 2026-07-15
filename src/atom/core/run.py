@@ -247,6 +247,7 @@ def run_package(
         # never kills the run — deployable:false with native/ fallback.
         from atom.core.provenance.amp import export_amp
 
+        parity_X, parity_y = _parity_sample(val, task)
         amp_candidates = candidates if use_ensemble else [candidates[best_single_idx]]
         amp = export_amp(
             run_dir=writer.dir,
@@ -257,8 +258,8 @@ def run_package(
                      [str(c) for c in (test_outputs[best_single_idx].get("classes") or [])]
                      or None),
             features=train.features,
-            sample_X=val.X[:512],
-            sample_y=(val.y[:512] if task.family in SUPERVISED else None),
+            sample_X=parity_X,
+            sample_y=parity_y,
             lineage={
                 "dataset_id": pkg.manifest.content_id,
                 "dataset_name": pkg.manifest.name,
@@ -289,6 +290,27 @@ def run_package(
         )
 
 
+def _parity_sample(val, task, cap: int = 1024, per_class_min: int = 50):
+    """Parity sample for AMP export. Classification samples are STRATIFIED
+    with a minority floor — on a 3%-positive dataset a flat 512-row sample
+    held ~15 positives, making f1-delta pure noise."""
+    import numpy as np
+
+    if task.family not in SUPERVISED or val.y is None:
+        return val.X[:cap], (val.y[:cap] if task.family in SUPERVISED else None)
+    if task.family is TaskFamily.REGRESSION:
+        return val.X[:cap], val.y[:cap]
+    y = val.y.astype(str)
+    idx_parts = []
+    classes = np.unique(y)
+    per_class = max(per_class_min, cap // max(len(classes), 1))
+    for cls in classes:
+        cls_idx = np.flatnonzero(y == cls)
+        idx_parts.append(cls_idx[:per_class])
+    idx = np.sort(np.concatenate(idx_parts))[:cap]
+    return val.X[idx], val.y[idx]
+
+
 def _leak_screen(train, task, max_sample: int = 20_000, r_threshold: float = 0.98) -> list[str]:
     """Cheap target-leakage screen: flag features almost perfectly correlated
     with the target (measured need: szeged-weather 'Apparent Temperature',
@@ -317,6 +339,8 @@ def _leak_screen(train, task, max_sample: int = 20_000, r_threshold: float = 0.9
         r = abs(float(np.corrcoef(xj[mask], yv[mask])[0, 1]))
         if r >= r_threshold:
             flags.append(f"possible-target-leakage: '{name}' (|r|={r:.3f})")
+        elif r >= 0.90:  # second tier: worth a human look, not a near-certain leak
+            flags.append(f"suspicious-correlation: '{name}' (|r|={r:.3f})")
     return flags
 
 

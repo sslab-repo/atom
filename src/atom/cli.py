@@ -169,7 +169,16 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
     import os
 
     slug = args.source.split(":", 1)[1]
-    path = kagglehub.dataset_download(slug)
+    try:
+        path = kagglehub.dataset_download(slug)
+    except Exception as exc:
+        msg = str(exc)
+        if "permission" in msg.lower() or "403" in msg or "authenticated" in msg.lower():
+            print(f"'{slug}' requires a Kaggle login/consent — add credentials to "
+                  "~/.kaggle/kaggle.json or choose a public dataset", file=sys.stderr)
+        else:
+            print(f"download failed for '{slug}': {msg[:200]}", file=sys.stderr)
+        return 1
     csvs = sorted((os.path.join(r, f) for r, _, fs in os.walk(path) for f in fs
                    if f.lower().endswith(".csv")), key=os.path.getsize, reverse=True)
     if not csvs:

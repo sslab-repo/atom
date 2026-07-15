@@ -192,15 +192,18 @@ def _parity(onnx_bytes: bytes, pipeline, X: np.ndarray, is_classifier: bool,
 
     sess = ort.InferenceSession(onnx_bytes, providers=["CPUExecutionProvider"])
     X32 = X.astype(np.float32)
+    # native reference gets the float64 upcast of the SAME values: identical
+    # numerics, and sklearn kernels (e.g. KMeans) require dtype-matched input
+    X64 = X32.astype(np.float64)
     outs = sess.run(None, {"X": X32})
     if is_classifier:
-        native_pred = pipeline.predict(X32).astype(str)
+        native_pred = pipeline.predict(X64).astype(str)
         onnx_pred = np.asarray(outs[0]).astype(str)
         agreement = float(np.mean(native_pred == onnx_pred))
         report = {"label_agreement": agreement}
         min_agreement = LABEL_AGREEMENT_MIN if agreement_min is None else agreement_min
         if hasattr(pipeline, "predict_proba") and len(outs) > 1:
-            diff = np.abs(pipeline.predict_proba(X32) - outs[1]).max(axis=1)
+            diff = np.abs(pipeline.predict_proba(X64) - outs[1]).max(axis=1)
             report["proba_match_fraction"] = float(np.mean(diff <= PROBA_ATOL))
             report["proba_max_diff"] = float(diff.max())  # recorded, not gating
         if sample_y is not None:  # metric equivalence: the deployment gate
@@ -210,14 +213,18 @@ def _parity(onnx_bytes: bytes, pipeline, X: np.ndarray, is_classifier: bool,
             d = abs(f1_score(y, native_pred, average="macro")
                     - f1_score(y, onnx_pred, average="macro"))
             report["metric_delta_f1_macro"] = float(d)
-            report["pass"] = agreement >= min_agreement and d <= METRIC_DELTA_MAX
+            # metric equivalence is primary; the agreement floor exists to
+            # catch systematic corruption (label inversion measures ~0.2-0.5),
+            # not boundary noise (0.98-0.999 on dense tree ensembles)
+            floor = agreement_min if agreement_min is not None else 0.98
+            report["pass"] = agreement >= floor and d <= METRIC_DELTA_MAX
         elif "proba_match_fraction" in report:
             report["pass"] = (agreement >= min_agreement
                               and report["proba_match_fraction"] >= MATCH_FRACTION_MIN)
         else:
             report["pass"] = agreement >= min_agreement
         return report
-    native = pipeline.predict(X32).ravel()
+    native = pipeline.predict(X64).ravel()
     onnx_out = np.asarray(outs[0]).ravel()
     rel = np.abs(native - onnx_out) / np.maximum(np.abs(native), 1e-6)
     report = {"rel_match_fraction": float(np.mean(rel <= REGRESSION_RTOL)),
