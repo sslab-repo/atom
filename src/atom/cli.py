@@ -156,6 +156,35 @@ def _smoke(module) -> str:
         return f"{type(exc).__name__}: {exc}"
 
 
+def _cmd_fetch(args: argparse.Namespace) -> int:
+    """Fetch a remote dataset and convert it into an ADP (packager source)."""
+    if not args.source.startswith("kaggle:"):
+        print("supported sources: kaggle:<owner/dataset>", file=sys.stderr)
+        return 2
+    try:
+        import kagglehub
+    except ImportError:
+        print("kagglehub not installed — pip install 'atom-ai[kaggle]'", file=sys.stderr)
+        return 2
+    import os
+
+    slug = args.source.split(":", 1)[1]
+    path = kagglehub.dataset_download(slug)
+    csvs = sorted((os.path.join(r, f) for r, _, fs in os.walk(path) for f in fs
+                   if f.lower().endswith(".csv")), key=os.path.getsize, reverse=True)
+    if not csvs:
+        print(f"no CSV files in {slug} ({path}) — pack manually", file=sys.stderr)
+        return 1
+    if args.file:
+        csvs = [c for c in csvs if os.path.basename(c) == args.file] or csvs
+    from atom.data import pack_csv
+
+    name = args.name or slug.replace("/", "-")
+    root = pack_csv(csvs[0], args.out, name=name, target=args.target)
+    print(f"fetched {slug} ({os.path.basename(csvs[0])}) -> ADP: {root}")
+    return 0
+
+
 def _cmd_pack(args: argparse.Namespace) -> int:
     from atom.data import pack_csv
 
@@ -203,6 +232,14 @@ def main(argv: list[str] | None = None) -> int:
     p_pack.add_argument("--name", help="package name (default: CSV stem)")
     p_pack.add_argument("--target", help="target/label column name")
     p_pack.set_defaults(func=_cmd_pack)
+
+    p_fetch = sub.add_parser("fetch", help="fetch kaggle:<slug> and convert to an ADP")
+    p_fetch.add_argument("source")
+    p_fetch.add_argument("--target", help="target column for the packed ADP")
+    p_fetch.add_argument("--file", help="specific CSV inside the dataset (default: largest)")
+    p_fetch.add_argument("--name")
+    p_fetch.add_argument("--out", "-o", default=".")
+    p_fetch.set_defaults(func=_cmd_fetch)
 
     p_pimg = sub.add_parser("pack-images",
                             help="convert an image folder (class-per-subfolder) into an ADP")
