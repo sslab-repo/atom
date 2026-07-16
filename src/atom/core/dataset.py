@@ -28,6 +28,7 @@ class TabularMatrix:
     y: np.ndarray | None  # object (classification) or float64 (regression)
     features: list[str]
     dropped: dict[str, str] = field(default_factory=dict)  # column -> reason
+    unlabeled_dropped: int = 0  # rows removed because the target was missing
 
     @property
     def n(self) -> int:
@@ -147,11 +148,17 @@ def load_matrix(
         j += len(vocab)
 
     y = None
+    unlabeled = 0
     if target:
         parts = []
         for chunk in chunks:
             col = chunk.column(chunk.schema.get_field_index(target))
             parts.extend("" if v is None else str(v).strip() for v in column_to_pylist(col))
         y = np.array(parts, dtype=object)
+        labeled = np.array([v not in MISSING_SENTINELS for v in y], dtype=bool)
+        if not labeled.all():  # missing target: unusable for fit or scoring
+            unlabeled = int((~labeled).sum())
+            X, y = X[labeled], y[labeled]
 
-    return TabularMatrix(X=X, y=y, features=features + onehot_names, dropped=dropped)
+    return TabularMatrix(X=X, y=y, features=features + onehot_names, dropped=dropped,
+                         unlabeled_dropped=unlabeled)

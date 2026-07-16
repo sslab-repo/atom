@@ -25,6 +25,7 @@ from atom.registries import find
 PREPROCESSING_CHAIN = ("impute-simple", "scale")
 DEFAULT_BATCH = 9
 REDUCTION = 3
+MAX_ALL_ERROR_BATCHES = 3  # consecutive batches where every trial fails -> stop
 
 
 @dataclass
@@ -141,6 +142,7 @@ class Orchestrator:
     def run(self, progress: Callable[[str], None] = lambda s: None) -> list[Trial]:
         method_names = list(self.methods)
         rung_fidelities = self._fidelity_ladder(method_names[0])
+        all_error_batches = 0
         while not self.budget.search_exhausted():
             specs = [
                 self._sample_spec(method_names[i % len(method_names)])
@@ -154,6 +156,7 @@ class Orchestrator:
             self.rng.shuffle(method_names)
             survivors = specs
             batch_admitted = 0
+            batch_ok = 0
             for rung, fidelity in enumerate(rung_fidelities):
                 results = []
                 for spec in survivors:
@@ -166,10 +169,13 @@ class Orchestrator:
                 ok = sorted(
                     (t for t in results if t.status == "ok"), key=lambda t: t.score, reverse=True
                 )
+                batch_ok += len(ok)
                 est = self.budget.estimate()
+                failure = "" if ok else self._rung_error(results)
                 progress(
                     f"rung f={fidelity:g}: {len(ok)}/{len(results)} ok"
                     + (f", best {self.task.primary_metric}={abs(ok[0].score):.4f}" if ok else "")
+                    + (f" — {failure}" if failure else "")
                     + f"  [{est['elapsed_s']:.0f}s elapsed, ~{est['estimated_end_in_s']:.0f}s left]"
                 )
                 if rung == len(rung_fidelities) - 1 or not ok:
@@ -177,7 +183,35 @@ class Orchestrator:
                 survivors = [t.spec for t in ok[: max(1, len(ok) // REDUCTION)]]
             if batch_admitted == 0:  # nothing affordable anymore: stop, don't spin
                 break
+            if batch_ok == 0:  # every admitted trial errored
+                all_error_batches += 1
+                if all_error_batches >= MAX_ALL_ERROR_BATCHES:
+                    sig, count, total = self.error_summary()
+                    progress(f"stopping search: {all_error_batches} consecutive batches "
+                             f"with every trial failing ({total} errors; "
+                             f"most common ×{count}: {sig})")
+                    break
+            else:
+                all_error_batches = 0
         return self.archive
+
+    @staticmethod
+    def _rung_error(results: list[Trial]) -> str:
+        errors = [t.error.strip().splitlines()[-1] for t in results
+                  if t.status == "error" and t.error]
+        return errors[0] if errors else ""
+
+    def error_summary(self) -> tuple[str, int, int]:
+        """(most common error signature, its count, total errored trials)."""
+        sigs: dict[str, int] = {}
+        for t in self.archive:
+            if t.status == "error" and t.error:
+                sig = t.error.strip().splitlines()[-1]
+                sigs[sig] = sigs.get(sig, 0) + 1
+        if not sigs:
+            return "", 0, 0
+        top = max(sigs.items(), key=lambda kv: kv[1])
+        return top[0], top[1], sum(sigs.values())
 
     def _affordable(self, method_name: str, fidelity: float) -> bool:
         """Estimated trial cost must fit the remaining search window.

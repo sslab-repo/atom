@@ -10,7 +10,7 @@ import time
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from atom.contract import Module, ModuleKind, Operation, RunContext
+from atom.contract import Module, ModuleKind, Operation, RunContext, TaskFamily
 from atom.core.dataset import TabularMatrix
 from atom.core.task_inference import TaskSpec
 
@@ -45,6 +45,13 @@ class Evaluator:
             data["X"] = X
         return self.metric_module.run(RunContext(Operation.SCORE, data)).metrics
 
+    def metric_features(self, pipeline: "FittedPipeline | None", X):
+        """Unsupervised metrics (silhouette) score in the model's feature
+        space: raw X may hold NaNs that the pipeline's imputer owns."""
+        if self.spec.family is TaskFamily.CLUSTERING and pipeline is not None:
+            return pipeline.transform(X)
+        return X
+
     def oriented(self, metrics: dict[str, float]) -> float:
         primary = self.spec.primary_metric
         value = metrics.get(primary)
@@ -54,7 +61,8 @@ class Evaluator:
 
     def evaluate(self, pipeline: "FittedPipeline", started: float) -> EvalResult:
         outputs = pipeline.predict(self.val.X)
-        metrics = self.score_predictions(self.val.y, outputs, X=self.val.X)
+        metrics = self.score_predictions(self.val.y, outputs,
+                                         X=self.metric_features(pipeline, self.val.X))
         return EvalResult(
             score=self.oriented(metrics), metrics=metrics, cost_s=time.monotonic() - started
         )
@@ -94,7 +102,7 @@ class Evaluator:
             outputs = fitted.predict(train.X[ho_idx])
             fold_metrics = self.score_predictions(
                 train.y[ho_idx] if train.y is not None else None,
-                outputs, X=train.X[ho_idx])
+                outputs, X=self.metric_features(fitted, train.X[ho_idx]))
             for k, v in fold_metrics.items():
                 all_metrics.setdefault(k, []).append(v)
         metrics = {k: float(np.mean(v)) for k, v in all_metrics.items()}

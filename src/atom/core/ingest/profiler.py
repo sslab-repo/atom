@@ -12,7 +12,7 @@ from typing import Any
 
 from atom.data.package import DatasetPackage
 
-MISSING_SENTINELS = {"", "NaN", "nan", "NA", "null", "None"}
+MISSING_SENTINELS = {"", "NaN", "nan", "NA", "N/A", "n/a", "null", "NULL", "None", "?"}
 INF_SENTINELS = {"Infinity", "-Infinity", "inf", "-inf", "Inf"}
 
 FINGERPRINT_VERSION = "fingerprint-v1"
@@ -154,7 +154,15 @@ def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
             type_votes[_classify_value(v)] += 1
             if len(distinct) <= 10_000:
                 distinct.add(str(v))
-        if type_votes["string"]:
+        numeric_votes = type_votes["number"] + type_votes["integer"]
+        if type_votes["string"] and numeric_votes >= 19 * type_votes["string"]:
+            # ≥95% of non-missing values parse as numbers: a numeric column
+            # polluted by unrecognized missing markers, not a real string
+            # column (stroke bmi "N/A", auto-mpg horsepower "?"). Loading
+            # coerces the stragglers to NaN for the imputer.
+            dtype = "number" if type_votes["number"] else "integer"
+            fp.quality_flags.append(f"numeric-coerced:{col_name}")
+        elif type_votes["string"]:
             dtype = "string"
         elif type_votes["number"]:
             dtype = "number"
@@ -179,9 +187,15 @@ def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
     for target in m.roles.target:
         if target in table.column_names:
             counts: dict[str, int] = {}
+            unlabeled = 0
             for v in column_to_pylist(table.column(target)):
-                key = "" if v is None else str(v)
+                if v is None or str(v).strip() in MISSING_SENTINELS:
+                    unlabeled += 1  # missing target is absent data, not a class
+                    continue
+                key = str(v)
                 counts[key] = counts.get(key, 0) + 1
+            if unlabeled:
+                fp.quality_flags.append(f"unlabeled-rows:{target}:{unlabeled}")
             fp.target_classes = dict(sorted(counts.items(), key=lambda kv: -kv[1]))
             if len(counts) > 1:
                 top = max(counts.values())

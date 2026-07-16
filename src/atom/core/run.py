@@ -91,6 +91,9 @@ def run_package(
         if train.dropped:
             progress(f"dropped {len(train.dropped)} non-feature columns "
                      f"({', '.join(list(train.dropped)[:6])}…)")
+        if train.unlabeled_dropped or val.unlabeled_dropped:
+            progress(f"dropped unlabeled rows (missing '{task.target}'): "
+                     f"{train.unlabeled_dropped} train, {val.unlabeled_dropped} val")
         if not train.features:
             raise SystemExit(
                 "no usable features — every column was dropped "
@@ -151,6 +154,11 @@ def run_package(
         top_k = TOP_K if budget.elapsed < wall_clock_s * 0.9 else 2
         top = orch.best_trials(top_k)
         if not top:
+            sig, count, total = orch.error_summary()
+            if total:  # failures, not slowness: say what actually broke
+                raise SystemExit(
+                    f"no successful trials: {total} trial(s) failed — "
+                    f"most common error (×{count}): {sig}")
             raise SystemExit("no successful trials within budget — increase --time-budget")
         progress(f"finalizing: up to {len(top)} candidates at full fidelity…")
         candidates, outputs, kept = [], [], []
@@ -176,8 +184,9 @@ def run_package(
                 progress(f"candidate failed at full fidelity, skipping: {exc}")
         if not candidates:
             raise SystemExit("all finalize candidates failed — see trials.jsonl")
-        singles = [evaluator.oriented(evaluator.score_predictions(val.y, o, X=val.X))
-                   for o in outputs]
+        singles = [evaluator.oriented(evaluator.score_predictions(
+                       val.y, o, X=evaluator.metric_features(c, val.X)))
+                   for c, o in zip(candidates, outputs)]
         best_single_idx = max(range(len(singles)), key=singles.__getitem__)
 
         if task.family in SUPERVISED and budget.elapsed < wall_clock_s:
@@ -207,7 +216,10 @@ def run_package(
             final_kind = "single"
             final_test = test_outputs[best_single_idx]
             val_score = singles[best_single_idx]
-        test_metrics = evaluator.score_predictions(test.y, final_test, X=test.X)
+        test_metrics = evaluator.score_predictions(
+            test.y, final_test,
+            X=evaluator.metric_features(
+                None if use_ensemble else candidates[best_single_idx], test.X))
 
         writer = RunWriter(out_root, pkg.source.name)
         writer.write_run({
