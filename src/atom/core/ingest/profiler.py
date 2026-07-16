@@ -7,16 +7,79 @@ at most `sample_rows` from the train split.
 
 from __future__ import annotations
 
+import math
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
 from atom.data.package import DatasetPackage
 
-MISSING_SENTINELS = {"", "NaN", "nan", "NA", "N/A", "n/a", "null", "NULL", "None", "?"}
-INF_SENTINELS = {"Infinity", "-Infinity", "inf", "-inf", "Inf"}
+# matched case-insensitively via is_missing(); covers the common junk seen
+# across CSV exporters (SAS ".", accounting "-", spreadsheet "#N/A", …)
+MISSING_SENTINELS = {"", "na", "n/a", "n.a.", "n.a", "#n/a", "#na", "nan",
+                     "null", "none", "nil", "missing", "unknown", "?", "-",
+                     "--", "---", ".", ".."}
+INF_SENTINELS = {"infinity", "-infinity", "inf", "-inf", "+inf"}
 
 FINGERPRINT_VERSION = "fingerprint-v1"
+
+
+def is_missing(v: Any) -> bool:
+    return v is None or (isinstance(v, str) and v.strip().lower() in MISSING_SENTINELS)
+
+
+def _is_inf_token(v: Any) -> bool:
+    return isinstance(v, str) and v.strip().lower() in INF_SENTINELS
+
+
+_ACCOUNTING = re.compile(r"^\((.*)\)$")           # "(50)" -> negative 50
+_THOUSANDS = re.compile(r"^-?\d{1,3}(,\d{3})+(\.\d+)?$")  # "1,234,567" / "1,234.56"
+_SINGLE_COMMA = re.compile(r"^-?\d+,\d+$")         # "27,3" — decimal vs thousands: caller decides
+_CURRENCY_CHARS = "$€£¥₩¢"
+
+
+def parse_numeric(value: Any, decimal_comma: bool = False) -> float | None:
+    """Best-effort numeric parse under full exception control: returns a
+    float, or None when the value is missing/non-numeric. Generalizes the
+    real-world dirtiness of CSV numeric columns — currency symbols, percent
+    signs, thousands separators, accounting-parenthesis negatives, stray
+    whitespace, and (when the column is flagged) locale decimal commas.
+    Unit-suffixed values ('5 kg') are intentionally NOT parsed — stripping
+    arbitrary units guesses at semantics — so they fall through to None and
+    the ≥95%-numeric column gate drops the column as categorical."""
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, (int, float)):
+        f = float(value)
+        return f if math.isfinite(f) else None
+    if value is None:
+        return None
+    s = str(value).strip()
+    if is_missing(s):
+        return None
+    negative = False
+    acct = _ACCOUNTING.match(s)
+    if acct:
+        s, negative = acct.group(1).strip(), True
+    for ch in _CURRENCY_CHARS:
+        s = s.replace(ch, "")
+    s = s.strip().lstrip("+")
+    percent = s.endswith("%")
+    if percent:
+        s = s[:-1].strip()
+    if decimal_comma:                 # locale "1.234,56" -> "1234.56"
+        s = s.replace(".", "").replace(",", ".")
+    elif _THOUSANDS.match(s):         # grouped separators "1,234,567"
+        s = s.replace(",", "")
+    try:
+        f = float(s)
+    except (ValueError, TypeError):
+        return None
+    if not math.isfinite(f):
+        return None
+    if percent:
+        f /= 100.0
+    return -f if negative else f
 
 
 def column_to_pylist(col) -> list:
@@ -64,33 +127,26 @@ class Fingerprint:
         return asdict(self)
 
 
-_DECIMAL_COMMA = re.compile(r"^-?\d+,\d+$")
-
-
 def _classify_value(v: Any) -> str:
-    """Observed type of one non-missing cell value."""
+    """Observed type of one non-missing cell value: 'integer', 'number',
+    'comma' (single-comma value, ambiguous decimal-vs-thousands — the column
+    decides), or 'string'. All numeric dirtiness routes through
+    parse_numeric so the profiler and the loader agree on what is numeric."""
     if isinstance(v, bool):
         return "string"
     if isinstance(v, int):
         return "integer"
     if isinstance(v, float):
         return "number"
-    s = str(v)
+    s = str(v).strip()
     try:
         int(s)
         return "integer"
     except ValueError:
         pass
-    try:
-        float(s)
-        return "number"
-    except ValueError:
-        pass
-    # locale radix comma ("27,3"): a number, not a category. Guard against
-    # thousands separators ("1,234") by requiring a non-3-digit fraction.
-    if _DECIMAL_COMMA.match(s.strip()):
-        return "decimal-comma"
-    return "string"
+    if _SINGLE_COMMA.match(s):  # "27,3" (decimal) or "1,234" (thousands): defer
+        return "comma"
+    return "number" if parse_numeric(v) is not None else "string"
 
 
 def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
@@ -153,45 +209,39 @@ def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
         n = len(values)
         missing = inf = 0
         type_votes: dict[str, int] = {"integer": 0, "number": 0, "string": 0,
-                                      "decimal-comma": 0}
+                                      "comma": 0}
         comma_frac_lengths: set[int] = set()
         distinct = set()
         for v in values:
-            if v is None or (isinstance(v, str) and v.strip() in MISSING_SENTINELS):
+            if is_missing(v):
                 missing += 1
                 continue
-            if isinstance(v, str) and v.strip() in INF_SENTINELS:
+            if _is_inf_token(v):
                 inf += 1
                 continue
             vote = _classify_value(v)
             type_votes[vote] += 1
-            if vote == "decimal-comma":
+            if vote == "comma":
                 comma_frac_lengths.add(len(str(v).strip().split(",")[1]))
             if len(distinct) <= 10_000:
                 distinct.add(str(v))
-        numeric_votes = type_votes["number"] + type_votes["integer"]
-        # a comma column is decimal only if some fraction isn't 3 digits —
-        # "1,234"/"5,678" (always 3) is a thousands separator, keep as string
-        comma_is_decimal = bool(comma_frac_lengths - {3})
-        comma_votes = type_votes["decimal-comma"] if comma_is_decimal else 0
-        decimal_comma = False
-        non_string = numeric_votes + comma_votes
-        if (type_votes["string"] or type_votes["decimal-comma"]) and \
-                non_string >= 19 * (type_votes["string"] + type_votes["decimal-comma"] - comma_votes):
-            # ≥95% of non-missing values are numeric once locale radix commas
-            # and unrecognized missing markers are handled: a numeric column,
-            # not a category (stroke bmi "N/A", auto-mpg hp "?", beer
-            # "Temperatura ... 27,3"). Loading coerces the stragglers to NaN.
-            dtype = "number" if (type_votes["number"] or comma_votes) else "integer"
-            decimal_comma = comma_votes > 0
-            fp.quality_flags.append(
-                f"{'decimal-comma' if decimal_comma else 'numeric-coerced'}:{col_name}")
-        elif type_votes["string"] or type_votes["decimal-comma"]:
-            dtype = "string"
-        elif type_votes["number"]:
-            dtype = "number"
-        elif type_votes["integer"]:
-            dtype = "integer"
+        # single-comma values are numeric either way; the fractions decide HOW
+        # to read them — a non-3-digit fraction means the comma is the radix
+        # point ("27,3"), all-3-digit means a thousands separator ("1,234").
+        comma = type_votes["comma"]
+        decimal_comma = comma > 0 and bool(comma_frac_lengths - {3})
+        numeric_votes = type_votes["number"] + type_votes["integer"] + comma
+        string_votes = type_votes["string"]
+        if numeric_votes and numeric_votes >= 19 * string_votes:
+            # ≥95% of non-missing values parse once currency/percent/thousands/
+            # radix-comma dirtiness and missing markers are handled: a numeric
+            # column, not a category (stroke bmi "N/A", auto-mpg hp "?", beer
+            # "27,3", a "$1,234" price). Load coerces the stragglers to NaN.
+            dtype = "integer" if not (type_votes["number"] or comma) else "number"
+            if decimal_comma:
+                fp.quality_flags.append(f"decimal-comma:{col_name}")
+            elif string_votes or comma:
+                fp.quality_flags.append(f"numeric-coerced:{col_name}")
         else:
             dtype = "string"
         fp.columns.append(
@@ -214,7 +264,7 @@ def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
             counts: dict[str, int] = {}
             unlabeled = 0
             for v in column_to_pylist(table.column(target)):
-                if v is None or str(v).strip() in MISSING_SENTINELS:
+                if is_missing(v):
                     unlabeled += 1  # missing target is absent data, not a class
                     continue
                 key = str(v)

@@ -14,6 +14,7 @@ import pytest
 
 from atom.core.dataset import load_matrix, select_features
 from atom.core.ingest import fingerprint
+from atom.core.ingest.profiler import is_missing, parse_numeric
 from atom.data import DatasetPackage, pack_csv
 
 ROWS = 300
@@ -29,7 +30,7 @@ def dirty_pkg(tmp_path_factory):
         for i in range(ROWS):
             bmi = "N/A" if i % 25 == 0 else f"{18 + (i % 20)}.{i % 10}"
             hp = "?" if i % 40 == 0 else str(60 + i % 120)
-            odd = "unknown" if i % 50 == 0 else f"{i}.25"  # non-sentinel marker
+            odd = "err" if i % 50 == 0 else f"{i}.25"  # real non-numeric junk
             stage = "" if i % 60 == 0 else str(1 + i % 4)
             w.writerow([str(20 + i % 50), bmi, hp, odd, stage])
     out = tmp_path_factory.mktemp("pkg")
@@ -55,6 +56,67 @@ def test_bug1_sentinels_load_as_nan(dirty_pkg):
     col = m.X[:, j]
     assert np.isnan(col).any()  # "N/A" cells became NaN for the imputer
     assert np.nanmax(col) < 50  # and the numeric values came through
+
+
+@pytest.mark.parametrize("raw,expected", [
+    ("$1,234.56", 1234.56),   # currency + thousands
+    ("€50", 50.0),
+    ("  1,234,567 ", 1234567.0),  # grouped thousands + whitespace
+    ("45%", 0.45), ("12.5%", 0.125),  # percent
+    ("(50)", -50.0),          # accounting negative
+    ("+5", 5.0), ("\t3.5\n", 3.5),
+    ("1e3", 1000.0), ("-0.0", 0.0),
+    ("42", 42.0),
+])
+def test_parse_numeric_generalized(raw, expected):
+    assert parse_numeric(raw) == pytest.approx(expected)
+
+
+@pytest.mark.parametrize("raw", ["", "-", "--", "#N/A", "n.a.", "NA", "missing",
+                                 "unknown", "nil", ".", "None", "NaN", "inf",
+                                 "-inf", "5 kg", "abc", "1.2.3"])
+def test_parse_numeric_rejects(raw):
+    # missing markers, infinities, unit-suffixed and non-numeric -> None
+    assert parse_numeric(raw) is None
+
+
+def test_parse_numeric_decimal_comma_flag():
+    assert parse_numeric("27,3", decimal_comma=True) == pytest.approx(27.3)
+    assert parse_numeric("1.234,56", decimal_comma=True) == pytest.approx(1234.56)
+
+
+def test_is_missing_case_insensitive():
+    assert is_missing("NA") and is_missing("n/a") and is_missing("  ")
+    assert not is_missing("0") and not is_missing("north")
+
+
+@pytest.fixture(scope="module")
+def dirty_wide_pkg(tmp_path_factory):
+    """A column per generalized dirtiness class, each ≥95% numeric."""
+    path = tmp_path_factory.mktemp("wide") / "wide.csv"
+    with path.open("w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["price", "pct", "big", "y"])
+        for i in range(ROWS):
+            price = "missing" if i % 30 == 0 else f"${i * 10:,}.{i % 100:02d}"
+            pct = f"{i % 100}%"
+            big = f"{1000 + (i * 137) % 9000:,}"  # "1,234"-style thousands
+            w.writerow([price, pct, big, str(i % 2)])
+    out = tmp_path_factory.mktemp("wpkg")
+    return DatasetPackage.open(pack_csv(path, out, name="wide-test", target="y"))
+
+
+def test_generalized_columns_kept_numeric(dirty_wide_pkg):
+    fp = fingerprint(dirty_wide_pkg)
+    by = {c.name: c for c in fp.columns}
+    assert by["price"].dtype == "number"   # currency + thousands + "missing"
+    assert by["pct"].dtype == "number"     # percent
+    assert by["big"].dtype in ("number", "integer")  # thousands separator
+    features, _, dropped = select_features(fp, "y")
+    assert {"price", "pct", "big"} <= set(features)
+    m = load_matrix(dirty_wide_pkg, fp, "train", "y")
+    pj = m.features.index("pct")
+    assert np.nanmax(m.X[:, pj]) <= 1.0  # percents divided by 100
 
 
 @pytest.fixture(scope="module")

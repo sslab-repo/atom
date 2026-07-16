@@ -230,6 +230,7 @@ def _quiet_library_noise() -> None:
     warnings.filterwarnings("ignore", message=".*failed to converge.*")
     warnings.filterwarnings("ignore", message=".*y_pred contains classes not in y_true.*")
     warnings.filterwarnings("ignore", message=".*The least populated class in y.*")
+    warnings.filterwarnings("ignore", message=".*ill-conditioned matrix.*")
     try:
         from sklearn.exceptions import ConvergenceWarning
 

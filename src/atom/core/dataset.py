@@ -17,8 +17,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from atom.core.ingest.profiler import (INF_SENTINELS, MISSING_SENTINELS, Fingerprint,
-    column_to_pylist)
+from atom.core.ingest.profiler import (Fingerprint, column_to_pylist, is_missing,
+    parse_numeric)
 from atom.data.package import DatasetPackage
 
 
@@ -36,20 +36,10 @@ class TabularMatrix:
 
 
 def _to_float(v, decimal_comma: bool = False) -> float:
-    if v is None:
-        return math.nan
-    if isinstance(v, (int, float)):
-        return float(v)
-    s = str(v).strip()
-    if s in MISSING_SENTINELS or s in INF_SENTINELS:
-        return math.nan
-    if decimal_comma:  # locale radix comma: "27,3" -> 27.3
-        s = s.replace(",", ".")
-    try:
-        f = float(s)
-        return f if math.isfinite(f) else math.nan
-    except ValueError:
-        return math.nan
+    """Loader-side numeric read: the same parser the profiler voted with, so
+    a column typed numeric is read numeric (NaN for the coerced stragglers)."""
+    f = parse_numeric(v, decimal_comma=decimal_comma)
+    return math.nan if f is None else f
 
 
 MAX_ONEHOT_COLUMNS = 256
@@ -163,7 +153,7 @@ def load_matrix(
                 s = "" if v is None else str(v).strip()
                 parts.append(s.replace(",", ".") if target_comma and s else s)
         y = np.array(parts, dtype=object)
-        labeled = np.array([v not in MISSING_SENTINELS for v in y], dtype=bool)
+        labeled = np.array([not is_missing(v) for v in y], dtype=bool)
         if not labeled.all():  # missing target: unusable for fit or scoring
             unlabeled = int((~labeled).sum())
             X, y = X[labeled], y[labeled]
