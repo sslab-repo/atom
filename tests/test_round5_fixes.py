@@ -57,6 +57,45 @@ def test_bug1_sentinels_load_as_nan(dirty_pkg):
     assert np.nanmax(col) < 50  # and the numeric values came through
 
 
+@pytest.fixture(scope="module")
+def comma_pkg(tmp_path_factory):
+    """Brazilian-locale numeric columns ('27,3') + a thousands-separated
+    column ('1,234') that must stay categorical."""
+    path = tmp_path_factory.mktemp("comma") / "beer.csv"
+    with path.open("w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["temp", "rain", "pop", "y"])
+        for i in range(ROWS):
+            w.writerow([f"{20 + i % 15},{i % 10}",           # decimal comma "20,3"
+                        f"{i % 5},{(i * 7) % 100:02d}",       # decimal comma, 2-digit
+                        f"{1 + i % 9},{(i % 9) * 111:03d}",   # thousands "1,234" (3-digit)
+                        f"{10.0 + (i % 15):.3f}"])
+    out = tmp_path_factory.mktemp("cpkg")
+    return DatasetPackage.open(pack_csv(path, out, name="comma-test", target="y"))
+
+
+def test_bug4_decimal_comma_kept_numeric(comma_pkg):
+    fp = fingerprint(comma_pkg)
+    by_name = {c.name: c for c in fp.columns}
+    assert by_name["temp"].dtype == "number" and by_name["temp"].decimal_comma
+    assert by_name["rain"].dtype == "number" and by_name["rain"].decimal_comma
+    # thousands separator: NOT a decimal, must remain a string/categorical
+    assert not by_name["pop"].decimal_comma
+    features, _, dropped = select_features(fp, "y")
+    assert "temp" in features and "rain" in features
+    assert "temp" not in dropped and "rain" not in dropped
+    assert "decimal-comma:temp" in fp.quality_flags
+
+
+def test_bug4_decimal_comma_values_parse(comma_pkg):
+    fp = fingerprint(comma_pkg)
+    m = load_matrix(comma_pkg, fp, "train", "y")
+    j = m.features.index("temp")
+    col = m.X[:, j]
+    assert np.isfinite(col).all()  # every "20,3" parsed to a float
+    assert 20 <= np.nanmin(col) <= np.nanmax(col) < 36
+
+
 def test_bug2_unlabeled_rows_dropped(dirty_pkg):
     fp = fingerprint(dirty_pkg)
     # profiler: missing target is not a class

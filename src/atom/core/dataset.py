@@ -35,7 +35,7 @@ class TabularMatrix:
         return self.X.shape[0]
 
 
-def _to_float(v) -> float:
+def _to_float(v, decimal_comma: bool = False) -> float:
     if v is None:
         return math.nan
     if isinstance(v, (int, float)):
@@ -43,6 +43,8 @@ def _to_float(v) -> float:
     s = str(v).strip()
     if s in MISSING_SENTINELS or s in INF_SENTINELS:
         return math.nan
+    if decimal_comma:  # locale radix comma: "27,3" -> 27.3
+        s = s.replace(",", ".")
     try:
         f = float(s)
         return f if math.isfinite(f) else math.nan
@@ -99,6 +101,7 @@ def load_matrix(
     features, categorical, dropped = select_features(fp, target)
     onehot_names = [f"{c}={v}" for c, vocab in categorical.items() for v in vocab]
     columns = features + list(categorical) + ([target] if target else [])
+    comma_cols = {c.name for c in fp.columns if getattr(c, "decimal_comma", False)}
     member = pkg.processed_member(split)
 
     with pkg.source.open(member) as fh:
@@ -127,7 +130,9 @@ def load_matrix(
                 arr = col.to_numpy(zero_copy_only=False).astype(np.float64)
                 arr[~np.isfinite(arr)] = np.nan
             else:
-                arr = np.array([_to_float(v) for v in column_to_pylist(col)], dtype=np.float64)
+                dc = name in comma_cols
+                arr = np.array([_to_float(v, dc) for v in column_to_pylist(col)],
+                               dtype=np.float64)
             X[pos : pos + len(arr), j] = arr
             pos += len(arr)
     j = len(features)
@@ -150,10 +155,13 @@ def load_matrix(
     y = None
     unlabeled = 0
     if target:
+        target_comma = target in comma_cols
         parts = []
         for chunk in chunks:
             col = chunk.column(chunk.schema.get_field_index(target))
-            parts.extend("" if v is None else str(v).strip() for v in column_to_pylist(col))
+            for v in column_to_pylist(col):
+                s = "" if v is None else str(v).strip()
+                parts.append(s.replace(",", ".") if target_comma and s else s)
         y = np.array(parts, dtype=object)
         labeled = np.array([v not in MISSING_SENTINELS for v in y], dtype=bool)
         if not labeled.all():  # missing target: unusable for fit or scoring

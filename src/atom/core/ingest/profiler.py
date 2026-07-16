@@ -7,6 +7,7 @@ at most `sample_rows` from the train split.
 
 from __future__ import annotations
 
+import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
 
@@ -41,6 +42,7 @@ class ColumnProfile:
     inf_rate: float = 0.0
     distinct_sampled: int = 0
     categories: list[str] = field(default_factory=list)  # small string vocabularies
+    decimal_comma: bool = False  # numeric column written with ',' as the radix point
 
 
 @dataclass
@@ -62,6 +64,9 @@ class Fingerprint:
         return asdict(self)
 
 
+_DECIMAL_COMMA = re.compile(r"^-?\d+,\d+$")
+
+
 def _classify_value(v: Any) -> str:
     """Observed type of one non-missing cell value."""
     if isinstance(v, bool):
@@ -80,7 +85,12 @@ def _classify_value(v: Any) -> str:
         float(s)
         return "number"
     except ValueError:
-        return "string"
+        pass
+    # locale radix comma ("27,3"): a number, not a category. Guard against
+    # thousands separators ("1,234") by requiring a non-3-digit fraction.
+    if _DECIMAL_COMMA.match(s.strip()):
+        return "decimal-comma"
+    return "string"
 
 
 def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
@@ -142,7 +152,9 @@ def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
         values = column_to_pylist(table.column(col_name))
         n = len(values)
         missing = inf = 0
-        type_votes: dict[str, int] = {"integer": 0, "number": 0, "string": 0}
+        type_votes: dict[str, int] = {"integer": 0, "number": 0, "string": 0,
+                                      "decimal-comma": 0}
+        comma_frac_lengths: set[int] = set()
         distinct = set()
         for v in values:
             if v is None or (isinstance(v, str) and v.strip() in MISSING_SENTINELS):
@@ -151,18 +163,30 @@ def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
             if isinstance(v, str) and v.strip() in INF_SENTINELS:
                 inf += 1
                 continue
-            type_votes[_classify_value(v)] += 1
+            vote = _classify_value(v)
+            type_votes[vote] += 1
+            if vote == "decimal-comma":
+                comma_frac_lengths.add(len(str(v).strip().split(",")[1]))
             if len(distinct) <= 10_000:
                 distinct.add(str(v))
         numeric_votes = type_votes["number"] + type_votes["integer"]
-        if type_votes["string"] and numeric_votes >= 19 * type_votes["string"]:
-            # ≥95% of non-missing values parse as numbers: a numeric column
-            # polluted by unrecognized missing markers, not a real string
-            # column (stroke bmi "N/A", auto-mpg horsepower "?"). Loading
-            # coerces the stragglers to NaN for the imputer.
-            dtype = "number" if type_votes["number"] else "integer"
-            fp.quality_flags.append(f"numeric-coerced:{col_name}")
-        elif type_votes["string"]:
+        # a comma column is decimal only if some fraction isn't 3 digits —
+        # "1,234"/"5,678" (always 3) is a thousands separator, keep as string
+        comma_is_decimal = bool(comma_frac_lengths - {3})
+        comma_votes = type_votes["decimal-comma"] if comma_is_decimal else 0
+        decimal_comma = False
+        non_string = numeric_votes + comma_votes
+        if (type_votes["string"] or type_votes["decimal-comma"]) and \
+                non_string >= 19 * (type_votes["string"] + type_votes["decimal-comma"] - comma_votes):
+            # ≥95% of non-missing values are numeric once locale radix commas
+            # and unrecognized missing markers are handled: a numeric column,
+            # not a category (stroke bmi "N/A", auto-mpg hp "?", beer
+            # "Temperatura ... 27,3"). Loading coerces the stragglers to NaN.
+            dtype = "number" if (type_votes["number"] or comma_votes) else "integer"
+            decimal_comma = comma_votes > 0
+            fp.quality_flags.append(
+                f"{'decimal-comma' if decimal_comma else 'numeric-coerced'}:{col_name}")
+        elif type_votes["string"] or type_votes["decimal-comma"]:
             dtype = "string"
         elif type_votes["number"]:
             dtype = "number"
@@ -177,6 +201,7 @@ def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
                 missing_rate=round(missing / n, 6) if n else 0.0,
                 inf_rate=round(inf / n, 6) if n else 0.0,
                 distinct_sampled=len(distinct),
+                decimal_comma=decimal_comma,
                 categories=(sorted(distinct) if dtype == "string"
                             and 0 < len(distinct) <= 64 and col_name != id_col else []),
             )
