@@ -1,7 +1,9 @@
 # ATOM — Initial Development Status
 
-Updated: 2026-07-14 · Suite: 28 tests green · `atom modules verify`: 17/17
+Updated: 2026-07-16 · Suite: 36 tests green · `atom modules verify`: 17/17
 · Reference dataset (CIC-IDS-2017, 623 MB zip) exercised at every milestone.
+· Validation: 25 Kaggle datasets across rounds 3–6; bugfix workflow iter-5
+  converged at 2 iterations (see docs/qa/bugfix-iter5-report.md).
 
 ## Milestones
 
