@@ -186,23 +186,60 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
         return 1
     if args.file:
         csvs = [c for c in csvs if os.path.basename(c) == args.file] or csvs
-    from atom.data import pack_csv
-
     name = args.name or slug.replace("/", "-")
-    root = pack_csv(csvs[0], args.out, name=name, target=args.target)
+    root = _pack_csv_with_help(csvs[0], args.out, name=name, target=args.target)
     print(f"fetched {slug} ({os.path.basename(csvs[0])}) -> ADP: {root}")
     return 0
 
 
 def _cmd_pack(args: argparse.Namespace) -> int:
-    from atom.data import pack_csv
-
-    root = pack_csv(args.csv, args.out, name=args.name, target=args.target)
+    root = _pack_csv_with_help(args.csv, args.out, name=args.name, target=args.target)
     print(f"wrote ADP: {root}")
     return 0
 
 
+def _pack_csv_with_help(csv_path, out, name, target):
+    """pack_csv, but a wrong --target dies with the header + a suggestion
+    instead of a traceback (grad-admissions: 'Chance of Admit ' vs no space)."""
+    from atom.data import pack_csv
+
+    try:
+        return pack_csv(csv_path, out, name=name, target=target)
+    except ValueError as exc:
+        if not (target and "not in CSV header" in str(exc)):
+            raise
+        import csv as _csv
+        import difflib
+        import os
+
+        with open(csv_path, newline="", encoding="utf-8", errors="replace") as fh:
+            header = [h.strip() for h in next(_csv.reader(fh), [])]  # pack strips too
+        close = difflib.get_close_matches(target, header, n=1, cutoff=0.6)
+        hint = f" — did you mean {close[0]!r}?" if close else ""
+        raise SystemExit(
+            f"target column {target!r} is not in {os.path.basename(csv_path)}{hint}\n"
+            f"columns: {', '.join(header[:25])}") from exc
+
+
+def _quiet_library_noise() -> None:
+    """CLI-only: mute sklearn chatter that buries ATOM's own output (a
+    120s run logged hundreds of ConvergenceWarnings). Library users keep
+    full warnings."""
+    import warnings
+
+    warnings.filterwarnings("ignore", message=".*failed to converge.*")
+    warnings.filterwarnings("ignore", message=".*y_pred contains classes not in y_true.*")
+    warnings.filterwarnings("ignore", message=".*The least populated class in y.*")
+    try:
+        from sklearn.exceptions import ConvergenceWarning
+
+        warnings.filterwarnings("ignore", category=ConvergenceWarning)
+    except ImportError:
+        pass
+
+
 def main(argv: list[str] | None = None) -> int:
+    _quiet_library_noise()
     parser = argparse.ArgumentParser(prog="atom", description="ATOM — AuTO ai Machine")
     sub = parser.add_subparsers(dest="command", required=True)
 

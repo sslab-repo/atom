@@ -131,9 +131,15 @@ def run_package(
         warm_specs = [PipelineSpec(**n["best_pipeline"]) for n in neighbors]
         if neighbors:
             prior_metric = neighbors[0].get("metric") or "score"
+            # a prior score only means something on the same metric AND a
+            # scale-free one — a prior rmse lives on another target's scale
+            scale_free = {"roc_auc", "f1_macro", "accuracy", "balanced_accuracy",
+                          "r2", "silhouette"}
+            prior = (f"best prior {prior_metric}≈{abs(neighbors[0]['val_score']):.3f}, "
+                     if prior_metric == task.primary_metric
+                     and prior_metric in scale_free else "")
             progress(f"meta-KB: warm-starting from {len(neighbors)} similar run(s), "
-                     f"best prior {prior_metric}≈{abs(neighbors[0]['val_score']):.3f}, "
-                     f"cost≈{neighbors[0]['cost_s']:.0f}s")
+                     f"{prior}cost≈{neighbors[0]['cost_s']:.0f}s")
 
         cv_folds = 3 if val.n < 1000 else 0  # small-data mode (locked default)
         if cv_folds:
@@ -220,6 +226,27 @@ def run_package(
             test.y, final_test,
             X=evaluator.metric_features(
                 None if use_ensemble else candidates[best_single_idx], test.X))
+
+        # Binary classification ships probabilities; the default 0.5 cut can
+        # be degenerate on imbalanced data (stroke: auc 0.90, bal_acc 0.50).
+        # Tune the threshold on VAL, report test metrics at it (report-only:
+        # the AMP's proba output is what deployers threshold).
+        if task.family is TaskFamily.CLASSIFICATION and task.n_classes == 2:
+            val_final = (ensemble.combine(outputs) if use_ensemble
+                         else outputs[best_single_idx])
+            _tuned_threshold(val.y, val_final, test.y, final_test,
+                             test_metrics, progress)
+
+        suspicions = [n for n in task.notes if n.startswith(
+            ("possible-target-leakage", "suspicious-correlation"))]
+        near_perfect = any(test_metrics.get(k, 0.0) >= thr for k, thr in
+                           (("r2", 0.995), ("roc_auc", 0.999), ("accuracy", 0.999)))
+        if suspicions and near_perfect:
+            verdict = ("suspiciously-perfect: near-perfect test score after "
+                       f"{len(suspicions)} correlated-feature warning(s) — verify those "
+                       "features aren't derived from the target")
+            task.notes.append(verdict)
+            progress(f"WARNING {verdict}")
 
         writer = RunWriter(out_root, pkg.source.name)
         writer.write_run({
@@ -321,6 +348,38 @@ def _parity_sample(val, task, cap: int = 1024, per_class_min: int = 50):
         idx_parts.append(cls_idx[:per_class])
     idx = np.sort(np.concatenate(idx_parts))[:cap]
     return val.X[idx], val.y[idx]
+
+
+def _tuned_threshold(val_y, val_out, test_y, test_out, test_metrics, progress) -> None:
+    """Pick the balanced-accuracy-optimal proba cut on val; report test
+    metrics at it when it beats the default. Never touches the model."""
+    import numpy as np
+
+    proba_v, proba_t = val_out.get("proba"), test_out.get("proba")
+    classes = val_out.get("classes")
+    if proba_v is None or proba_t is None or classes is None or len(classes) != 2:
+        return
+    from sklearn.metrics import balanced_accuracy_score, f1_score
+
+    pos = str(classes[1])
+    pv = np.asarray(proba_v, dtype=float)[:, 1]
+    pt = np.asarray(proba_t, dtype=float)[:, 1]
+    yv = (np.asarray(val_y).astype(str) == pos).astype(int)
+    yt = (np.asarray(test_y).astype(str) == pos).astype(int)
+    if len(np.unique(yv)) < 2 or len(np.unique(yt)) < 2:
+        return
+    grid = np.unique(np.append(np.quantile(pv, np.linspace(0.01, 0.99, 99)), 0.5))
+    thr = float(max(grid, key=lambda t: balanced_accuracy_score(yv, pv >= t)))
+    ba = float(balanced_accuracy_score(yt, pt >= thr))
+    base = test_metrics.get("balanced_accuracy", 0.0)
+    if thr != 0.5 and ba > base + 0.01:  # only report a real gain
+        test_metrics["decision_threshold"] = round(thr, 4)
+        test_metrics["balanced_accuracy_tuned"] = ba
+        test_metrics["f1_macro_tuned"] = float(
+            f1_score(yt, (pt >= thr).astype(int), average="macro"))
+        progress(f"decision threshold tuned on val: {thr:.3f} — test "
+                 f"balanced_accuracy {base:.3f} -> {ba:.3f} "
+                 "(report-only; the AMP outputs probabilities)")
 
 
 def _leak_screen(train, task, max_sample: int = 20_000, r_threshold: float = 0.98) -> list[str]:

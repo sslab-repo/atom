@@ -84,10 +84,15 @@ class Evaluator:
         import numpy as np
         from sklearn.model_selection import KFold, StratifiedKFold
 
-        y_str = train.y.astype(str) if train.y is not None else None
+        # Stratify on CLASSES only — regression y is also non-None (object
+        # strings), and stratifying continuous values degenerates: every
+        # value is a 1-member "class" (429 sklearn warnings on auto-mpg).
+        stratify = (self.spec.family is TaskFamily.CLASSIFICATION
+                    and train.y is not None)
+        y_str = train.y.astype(str) if stratify else None
         try:
             splitter = (StratifiedKFold(self.cv_folds, shuffle=True, random_state=seed)
-                        if y_str is not None else
+                        if stratify else
                         KFold(self.cv_folds, shuffle=True, random_state=seed))
             folds = list(splitter.split(train.X, y_str))
         except ValueError:  # e.g. a class with < k members
