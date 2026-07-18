@@ -238,7 +238,8 @@ def run_package(
                              test_metrics, progress)
 
         suspicions = [n for n in task.notes if n.startswith(
-            ("possible-target-leakage", "suspicious-correlation"))]
+            ("possible-target-leakage", "possible-conditional-leakage",
+             "suspicious-correlation"))]
         near_perfect = any(test_metrics.get(k, 0.0) >= thr for k, thr in
                            (("r2", 0.995), ("roc_auc", 0.999), ("accuracy", 0.999)))
         if suspicions and near_perfect:
@@ -402,6 +403,7 @@ def _leak_screen(train, task, max_sample: int = 20_000, r_threshold: float = 0.9
             return []
         yv = (train.y[:n].astype(str) == classes[-1]).astype(float)
     flags = []
+    flagged: set[str] = set()
     for j, name in enumerate(train.features):
         xj = train.X[:n, j]
         mask = np.isfinite(xj)
@@ -410,8 +412,31 @@ def _leak_screen(train, task, max_sample: int = 20_000, r_threshold: float = 0.9
         r = abs(float(np.corrcoef(xj[mask], yv[mask])[0, 1]))
         if r >= r_threshold:
             flags.append(f"possible-target-leakage: '{name}' (|r|={r:.3f})")
+            flagged.add(name)
         elif r >= 0.90:  # second tier: worth a human look, not a near-certain leak
             flags.append(f"suspicious-correlation: '{name}' (|r|={r:.3f})")
+
+    # Conditional leak: a feature marginally uncorrelated with the target but
+    # near-perfectly correlated with it *inside* a low-cardinality group — the
+    # interaction the marginal screen structurally can't see (ds-salaries:
+    # 'salary' reconstructs 'salary_in_usd' within each 'salary_currency').
+    # One-hot columns (named "col=value") are the ready-made group indicators.
+    groups = [(j, name.split("=", 1)[0]) for j, name in enumerate(train.features) if "=" in name]
+    for j, name in enumerate(train.features):
+        if "=" in name or name in flagged:
+            continue
+        xj = train.X[:n, j]
+        best_r, best_col = 0.0, None
+        for gj, gcol in groups:
+            m = (train.X[:n, gj] == 1.0) & np.isfinite(xj)
+            if m.sum() < 50 or np.std(xj[m]) == 0 or np.std(yv[m]) == 0:
+                continue
+            r = abs(float(np.corrcoef(xj[m], yv[m])[0, 1]))
+            if r > best_r:
+                best_r, best_col = r, gcol
+        if best_r >= r_threshold:
+            flags.append(
+                f"possible-conditional-leakage: '{name}' within '{best_col}' (|r|={best_r:.3f})")
     return flags
 
 

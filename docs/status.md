@@ -1,10 +1,12 @@
 # ATOM — Initial Development Status
 
-Updated: 2026-07-16 · Suite: 67 tests green · `atom modules verify`: 17/17
+Updated: 2026-07-18 · Suite: 69 tests green · `atom modules verify`: 17/17
 · Reference dataset (CIC-IDS-2017, 623 MB zip) exercised at every milestone.
-· Validation: 25 Kaggle datasets across rounds 3–6; bugfix workflow iter-5
+· Validation: 30 Kaggle datasets across rounds 3–7; bugfix workflow iter-5
   converged at 2 iterations (docs/qa/bugfix-iter5-report.md); iter-6 unified
-  and generalized dirty-input parsing (docs/qa/bugfix-iter6-dirty-input.md).
+  and generalized dirty-input parsing (docs/qa/bugfix-iter6-dirty-input.md);
+  iter-7 added conditional/interaction leak detection
+  (docs/qa/bugfix-iter7-leak-detection.md).
 
 ## Milestones
 

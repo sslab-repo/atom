@@ -242,3 +242,49 @@ def test_bug3_all_error_batches_stop_early():
     sig, count, total = orch.error_summary()
     assert "boom" in sig and count == total > 0
     assert total <= MAX_ALL_ERROR_BATCHES * 9 * 3  # no budget-long spin
+
+
+def _leak_screen_call(features, X, y, family_reg=True):
+    """Drive _leak_screen with a hand-built TabularMatrix-like object."""
+    from atom.core.dataset import TabularMatrix
+    from atom.core.run import _leak_screen
+    from atom.core.task_inference import infer
+
+    class FP:
+        modality, roles, target_classes, columns, quality_flags = (
+            "tabular", {"target": []}, {}, [], [])
+
+    task = infer(FP, task_override=("regression" if family_reg else "clustering"))
+    tm = TabularMatrix(X=X, y=y, features=features)
+    return _leak_screen(tm, task)
+
+
+def test_conditional_leak_detected():
+    # 'amount' is uncorrelated with target marginally, but within each
+    # currency group it's an exact linear function (ds-salaries pattern).
+    rng = np.random.default_rng(0)
+    n = 600
+    grp = rng.integers(0, 3, n)              # 3 currencies
+    rate = np.array([1.0, 150.0, 0.8])[grp]  # per-currency exchange rate
+    usd = rng.uniform(50_000, 200_000, n)    # target, in USD
+    amount = usd * rate                       # feature: local-currency amount
+    onehot = np.stack([(grp == k).astype(float) for k in range(3)], axis=1)
+    X = np.column_stack([amount, onehot])
+    features = ["amount", "cur=A", "cur=B", "cur=C"]
+    flags = _leak_screen_call(features, X, usd.astype(object))
+    assert any(f.startswith("possible-conditional-leakage: 'amount'") for f in flags)
+    # marginal correlation is weak, so the plain screen alone would miss it
+    marginal = abs(np.corrcoef(amount, usd)[0, 1])
+    assert marginal < 0.98
+
+
+def test_no_conditional_false_positive_on_clean_data():
+    rng = np.random.default_rng(1)
+    n = 600
+    grp = rng.integers(0, 3, n)
+    y = rng.uniform(0, 100, n)
+    x = rng.uniform(0, 100, n)  # independent of y
+    onehot = np.stack([(grp == k).astype(float) for k in range(3)], axis=1)
+    X = np.column_stack([x, onehot])
+    flags = _leak_screen_call(["x", "g=A", "g=B", "g=C"], X, y.astype(object))
+    assert not any("conditional" in f for f in flags)
