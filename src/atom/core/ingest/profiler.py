@@ -7,10 +7,13 @@ at most `sample_rows` from the train split.
 
 from __future__ import annotations
 
+import datetime as _dt
 import math
 import re
 from dataclasses import asdict, dataclass, field
 from typing import Any
+
+import numpy as np
 
 from atom.data.package import DatasetPackage
 
@@ -106,6 +109,7 @@ class ColumnProfile:
     distinct_sampled: int = 0
     categories: list[str] = field(default_factory=list)  # small string vocabularies
     decimal_comma: bool = False  # numeric column written with ',' as the radix point
+    datetime_format: str | None = None  # strptime format if the column parses as dates
 
 
 @dataclass
@@ -125,6 +129,69 @@ class Fingerprint:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+# Ordered so the radix-comma / day-first conventions are tried before their
+# ambiguous US counterparts; whichever parses the most sample values wins.
+_DATE_FORMATS = (
+    "%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S", "%Y-%m-%d %H:%M", "%Y-%m-%d",
+    "%Y/%m/%d", "%d/%m/%Y", "%m/%d/%Y", "%d-%m-%Y", "%m-%d-%Y",
+    "%d/%m/%Y %H:%M", "%m/%d/%Y %H:%M",
+)
+_EPOCH = _dt.date(1970, 1, 1)
+DATETIME_PARTS = ("year", "month", "day", "dayofweek", "epoch_days")
+
+
+def detect_datetime(values: list) -> str | None:
+    """strptime format that parses >=90% of a column's non-missing sample, or
+    None. Cheap pre-filter (needs a digit + '-'/'/'/'':') avoids scanning
+    every string column against every format."""
+    sample = [str(v).strip() for v in values if not is_missing(v)][:300]
+    if len(sample) < 10:
+        return None
+    if not any(any(c.isdigit() for c in s) and ("-" in s or "/" in s or ":" in s)
+               for s in sample[:25]):
+        return None
+    best_fmt, best_ok = None, 0
+    for fmt in _DATE_FORMATS:
+        ok = 0
+        for s in sample:
+            try:
+                _dt.datetime.strptime(s, fmt)
+                ok += 1
+            except (ValueError, TypeError):
+                pass
+        if ok > best_ok:
+            best_ok, best_fmt = ok, fmt
+        if best_ok == len(sample):
+            break
+    return best_fmt if best_ok >= 0.9 * len(sample) else None
+
+
+def datetime_parts(fmt: str) -> tuple[str, ...]:
+    return DATETIME_PARTS + (("hour",) if "%H" in fmt else ())
+
+
+def datetime_features(values: list, fmt: str) -> dict:
+    """Expand a datetime column into numeric parts (NaN where unparseable).
+    Ordinal epoch_days carries trend; year/month/day/dow carry seasonality."""
+    parts = datetime_parts(fmt)
+    cols = {p: np.full(len(values), np.nan) for p in parts}
+    for i, v in enumerate(values):
+        if is_missing(v):
+            continue
+        try:
+            d = _dt.datetime.strptime(str(v).strip(), fmt)
+        except (ValueError, TypeError):
+            continue
+        cols["year"][i] = d.year
+        cols["month"][i] = d.month
+        cols["day"][i] = d.day
+        cols["dayofweek"][i] = d.weekday()
+        cols["epoch_days"][i] = (d.date() - _EPOCH).days
+        if "hour" in cols:
+            cols["hour"][i] = d.hour
+    return cols
 
 
 def _classify_value(v: Any) -> str:
@@ -244,6 +311,14 @@ def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
                 fp.quality_flags.append(f"numeric-coerced:{col_name}")
         else:
             dtype = "string"
+        # a string column that parses as dates becomes datetime (expanded to
+        # numeric parts at load) instead of being one-hot'd or dropped
+        datetime_format = None
+        if dtype == "string" and col_name != id_col:
+            datetime_format = detect_datetime(values)
+            if datetime_format:
+                dtype = "datetime"
+                fp.quality_flags.append(f"datetime:{col_name}")
         fp.columns.append(
             ColumnProfile(
                 name=col_name,
@@ -252,6 +327,7 @@ def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
                 inf_rate=round(inf / n, 6) if n else 0.0,
                 distinct_sampled=len(distinct),
                 decimal_comma=decimal_comma,
+                datetime_format=datetime_format,
                 categories=(sorted(distinct) if dtype == "string"
                             and 0 < len(distinct) <= 64 and col_name != id_col else []),
             )
@@ -273,8 +349,10 @@ def fingerprint(pkg: DatasetPackage, sample_rows: int = 50_000) -> Fingerprint:
                 fp.quality_flags.append(f"unlabeled-rows:{target}:{unlabeled}")
             fp.target_classes = dict(sorted(counts.items(), key=lambda kv: -kv[1]))
             if len(counts) > 1:
-                top = max(counts.values())
-                rare = min(counts.values())
-                if rare / top < 0.01:
+                total = sum(counts.values())
+                minority = min(counts.values()) / total  # smallest-class fraction
+                if min(counts.values()) / max(counts.values()) < 0.01:
                     fp.quality_flags.append("severe-class-imbalance")
+                elif minority < 0.20:  # notable but not rare-class (pokemon 8%)
+                    fp.quality_flags.append(f"class-imbalance:{minority:.3f}")
     return fp

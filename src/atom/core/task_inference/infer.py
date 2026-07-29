@@ -100,9 +100,13 @@ def infer(
         spec.n_classes = len(classes) or None
         if classes:
             top, rare = max(classes.values()), min(classes.values())
+            minority = rare / sum(classes.values())
             spec.imbalanced = rare / top < 0.01
             if spec.imbalanced:
                 notes.append("severe class imbalance: rare-class classification (not anomaly detection)")
+            elif minority < 0.20:
+                notes.append(f"class imbalance: minority class is {minority:.1%} — "
+                             "default-threshold metrics may understate minority recall")
     _attach_metric(spec)
     return spec
 

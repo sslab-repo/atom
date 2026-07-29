@@ -43,7 +43,7 @@ def test_bug1_dirty_numeric_coerced_not_dropped(dirty_pkg):
     assert by_name["bmi"].dtype == "number"  # sentinel path: "N/A" is missing
     assert by_name["hp"].dtype in ("integer", "number")  # sentinel path: "?"
     assert by_name["odd"].dtype == "number"  # probe path: "unknown" coerced
-    features, _, dropped = select_features(fp, "stage")
+    features, _, dropped, _ = select_features(fp, "stage")
     assert {"bmi", "hp", "odd"} <= set(features)
     assert not {"bmi", "hp", "odd"} & set(dropped)
     assert "numeric-coerced:odd" in fp.quality_flags
@@ -112,7 +112,7 @@ def test_generalized_columns_kept_numeric(dirty_wide_pkg):
     assert by["price"].dtype == "number"   # currency + thousands + "missing"
     assert by["pct"].dtype == "number"     # percent
     assert by["big"].dtype in ("number", "integer")  # thousands separator
-    features, _, dropped = select_features(fp, "y")
+    features, _, dropped, _ = select_features(fp, "y")
     assert {"price", "pct", "big"} <= set(features)
     m = load_matrix(dirty_wide_pkg, fp, "train", "y")
     pj = m.features.index("pct")
@@ -143,7 +143,7 @@ def test_bug4_decimal_comma_kept_numeric(comma_pkg):
     assert by_name["rain"].dtype == "number" and by_name["rain"].decimal_comma
     # thousands separator: NOT a decimal, must remain a string/categorical
     assert not by_name["pop"].decimal_comma
-    features, _, dropped = select_features(fp, "y")
+    features, _, dropped, _ = select_features(fp, "y")
     assert "temp" in features and "rain" in features
     assert "temp" not in dropped and "rain" not in dropped
     assert "decimal-comma:temp" in fp.quality_flags
@@ -288,3 +288,38 @@ def test_no_conditional_false_positive_on_clean_data():
     X = np.column_stack([x, onehot])
     flags = _leak_screen_call(["x", "g=A", "g=B", "g=C"], X, y.astype(object))
     assert not any("conditional" in f for f in flags)
+
+
+@pytest.fixture(scope="module")
+def datetime_pkg(tmp_path_factory):
+    """A dataset with an ISO datetime column and a day-first date column."""
+    path = tmp_path_factory.mktemp("dt") / "events.csv"
+    with path.open("w", newline="") as fh:
+        w = csv.writer(fh)
+        w.writerow(["ts", "d", "x", "y"])
+        import datetime as dt
+        base = dt.datetime(2015, 1, 1)
+        for i in range(ROWS):
+            t = base + dt.timedelta(days=i, seconds=i * 137)
+            w.writerow([t.strftime("%Y-%m-%d %H:%M:%S"),
+                        f"{1 + i % 28:d}/{1 + i % 12:02d}/{2015 + i % 5}",
+                        i * 1.5, str(i % 2)])
+    out = tmp_path_factory.mktemp("dtpkg")
+    return DatasetPackage.open(pack_csv(path, out, name="dt-test", target="y"))
+
+
+def test_datetime_columns_detected_and_expanded(datetime_pkg):
+    fp = fingerprint(datetime_pkg)
+    by = {c.name: c for c in fp.columns}
+    assert by["ts"].dtype == "datetime" and "%H" in by["ts"].datetime_format
+    assert by["d"].dtype == "datetime"
+    assert "datetime:ts" in fp.quality_flags
+    _feat, _cat, dropped, datetimes = select_features(fp, "y")
+    assert set(datetimes) == {"ts", "d"}
+    assert "ts" not in dropped and "d" not in dropped  # not dropped, not one-hot
+    m = load_matrix(datetime_pkg, fp, "train", "y")
+    # ts carries a time component -> gets an hour part; d does not
+    assert "ts__hour" in m.features and "ts__epoch_days" in m.features
+    assert "d__year" in m.features and "d__hour" not in m.features
+    yr = m.X[:, m.features.index("d__year")]
+    assert np.nanmin(yr) >= 2015 and np.nanmax(yr) <= 2019  # real years extracted

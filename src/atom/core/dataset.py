@@ -17,8 +17,8 @@ from dataclasses import dataclass, field
 
 import numpy as np
 
-from atom.core.ingest.profiler import (Fingerprint, column_to_pylist, is_missing,
-    parse_numeric)
+from atom.core.ingest.profiler import (Fingerprint, column_to_pylist,
+    datetime_features, datetime_parts, is_missing, parse_numeric)
 from atom.data.package import DatasetPackage
 
 
@@ -56,7 +56,7 @@ def select_features(
     roles = fp.roles
     ignore = set(roles.get("ignore") or [])
     id_col = roles.get("id")
-    features, categorical, dropped = [], {}, {}
+    features, categorical, dropped, datetimes = [], {}, {}, {}
     budget = MAX_ONEHOT_COLUMNS
     for col in fp.columns:
         if col.name == target:
@@ -65,6 +65,8 @@ def select_features(
             dropped[col.name] = "id"
         elif col.name in ignore:
             dropped[col.name] = "role:ignore"
+        elif col.dtype == "datetime":
+            datetimes[col.name] = col.datetime_format
         elif col.dtype == "string":
             if col.categories and len(col.categories) <= budget:
                 categorical[col.name] = col.categories
@@ -75,7 +77,7 @@ def select_features(
                 dropped[col.name] = "high-cardinality string"
         else:
             features.append(col.name)
-    return features, categorical, dropped
+    return features, categorical, dropped, datetimes
 
 
 def load_matrix(
@@ -88,9 +90,12 @@ def load_matrix(
 ) -> TabularMatrix:
     import pyarrow.parquet as pq
 
-    features, categorical, dropped = select_features(fp, target)
+    features, categorical, dropped, datetimes = select_features(fp, target)
     onehot_names = [f"{c}={v}" for c, vocab in categorical.items() for v in vocab]
-    columns = features + list(categorical) + ([target] if target else [])
+    dt_specs = {c: (fmt, datetime_parts(fmt)) for c, fmt in datetimes.items()}
+    datetime_names = [f"{c}__{p}" for c, (_f, parts) in dt_specs.items() for p in parts]
+    columns = (features + list(categorical) + list(datetimes)
+               + ([target] if target else []))
     comma_cols = {c.name for c in fp.columns if getattr(c, "decimal_comma", False)}
     member = pkg.processed_member(split)
 
@@ -111,7 +116,8 @@ def load_matrix(
             chunks.append(batch.take(idx))
 
     n = sum(c.num_rows for c in chunks)
-    X = np.empty((n, len(features) + len(onehot_names)), dtype=np.float64)
+    X = np.empty((n, len(features) + len(onehot_names) + len(datetime_names)),
+                 dtype=np.float64)
     for j, name in enumerate(features):
         pos = 0
         for chunk in chunks:
@@ -141,6 +147,16 @@ def load_matrix(
             X[pos : pos + len(vals), j : j + len(vocab)] = block
             pos += len(vals)
         j += len(vocab)
+    for cname, (fmt, parts) in dt_specs.items():
+        pos = 0
+        for chunk in chunks:
+            col = chunk.column(chunk.schema.get_field_index(cname))
+            vals = column_to_pylist(col)
+            colmap = datetime_features(vals, fmt)
+            block = np.column_stack([colmap[p] for p in parts])
+            X[pos : pos + len(vals), j : j + len(parts)] = block
+            pos += len(vals)
+        j += len(parts)
 
     y = None
     unlabeled = 0
@@ -158,5 +174,5 @@ def load_matrix(
             unlabeled = int((~labeled).sum())
             X, y = X[labeled], y[labeled]
 
-    return TabularMatrix(X=X, y=y, features=features + onehot_names, dropped=dropped,
-                         unlabeled_dropped=unlabeled)
+    return TabularMatrix(X=X, y=y, features=features + onehot_names + datetime_names,
+                         dropped=dropped, unlabeled_dropped=unlabeled)
