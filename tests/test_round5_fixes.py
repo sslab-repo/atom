@@ -323,3 +323,32 @@ def test_datetime_columns_detected_and_expanded(datetime_pkg):
     assert "d__year" in m.features and "d__hour" not in m.features
     yr = m.X[:, m.features.index("d__year")]
     assert np.nanmin(yr) >= 2015 and np.nanmax(yr) <= 2019  # real years extracted
+
+
+def test_class_balance_search_dim_and_effect():
+    """class_balance is a search dim on every classifier and balanced
+    sample_weight lifts macro-F1 on imbalanced multiclass; regressors ignore it."""
+    import numpy as np
+    from atom.contract import Operation, RunContext
+    from atom.registries.methods.sklearn_supervised import (
+        HistGBClassifierM, RandomForestM, RidgeM)
+    from sklearn.metrics import f1_score
+
+    for cls in (HistGBClassifierM, RandomForestM):
+        params = {p.name for p in cls().space().parameters}
+        assert "class_balance" in params
+    assert "class_balance" not in {p.name for p in RidgeM().space().parameters}
+
+    rng = np.random.default_rng(1)
+    parts = [(400, 0.0), (40, 3.0), (12, 6.0)]
+    X = np.vstack([rng.normal(mu, 1.0, size=(n, 4)) for n, mu in parts])
+    y = np.array(sum(([str(i)] * n for i, (n, _) in enumerate(parts)), []), dtype=object)
+    m = HistGBClassifierM()
+
+    def macro(bal):
+        art = m.run(RunContext(Operation.FIT, {"X": X, "y": y},
+                    config={"class_balance": "balanced" if bal else "none", "_seed": 0})).artifacts
+        out = m.run(RunContext(Operation.SCORE, {"X": X}, artifacts=art)).outputs
+        return f1_score(y, out["pred"], average="macro")
+
+    assert macro(True) >= macro(False)

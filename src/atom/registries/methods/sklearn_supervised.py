@@ -49,7 +49,19 @@ class _Supervised(Module):
     def run(self, ctx: RunContext) -> RunResult:
         if ctx.operation is Operation.FIT:
             model = self._build(ctx.config, seed=int(ctx.config.get("_seed", 0)))
-            model.fit(ctx.data["X"], ctx.data["y"])
+            fit_kwargs = {}
+            # Class balancing is a per-classifier search dimension: sample_weight
+            # works uniformly across every sklearn classifier (incl. HistGB,
+            # which has no class_weight ctor arg), and only reweights training —
+            # the exported graph is unchanged. The search keeps it only when it
+            # wins on the task metric (decisive for macro-F1 on imbalanced
+            # multiclass; neutral otherwise).
+            if (self.FAMILY is TaskFamily.CLASSIFICATION
+                    and ctx.config.get("class_balance") == "balanced"):
+                from sklearn.utils.class_weight import compute_sample_weight
+
+                fit_kwargs["sample_weight"] = compute_sample_weight("balanced", ctx.data["y"])
+            model.fit(ctx.data["X"], ctx.data["y"], **fit_kwargs)
             return RunResult(artifacts={"model": model})
         if ctx.operation is Operation.SCORE:
             model = ctx.artifacts["model"]
@@ -68,7 +80,10 @@ class LogisticRegressionM(_Supervised):
     FAMILY, NAME, CATEGORY = TaskFamily.CLASSIFICATION, "logistic-regression", "linear"
 
     def space(self) -> SearchSpace:
-        return SearchSpace((Parameter("C", "log_float", (1e-3, 1e2), 1.0),))
+        return SearchSpace((
+            Parameter("C", "log_float", (1e-3, 1e2), 1.0),
+            Parameter("class_balance", "categorical", ("none", "balanced"), "none"),
+        ))
 
     def _build(self, config, seed):
         from sklearn.linear_model import LogisticRegression
@@ -84,6 +99,7 @@ class DecisionTreeM(_Supervised):
         return SearchSpace((
             Parameter("max_depth", "int", (3, 30), 12),
             Parameter("min_samples_leaf", "int", (1, 50), 5),
+            Parameter("class_balance", "categorical", ("none", "balanced"), "none"),
         ))
 
     def _build(self, config, seed):
@@ -103,6 +119,7 @@ class RandomForestM(_Supervised):
             Parameter("n_estimators", "int", (50, 300), 100),
             Parameter("max_depth", "int", (5, 40), 20),
             Parameter("min_samples_leaf", "int", (1, 20), 2),
+            Parameter("class_balance", "categorical", ("none", "balanced"), "none"),
         ))
 
     def _build(self, config, seed):
@@ -122,6 +139,7 @@ class HistGBClassifierM(_Supervised):
             Parameter("learning_rate", "log_float", (0.01, 0.5), 0.1),
             Parameter("max_iter", "int", (50, 400), 150),
             Parameter("max_leaf_nodes", "int", (15, 127), 31),
+            Parameter("class_balance", "categorical", ("none", "balanced"), "none"),
         ))
 
     def _build(self, config, seed):
@@ -198,6 +216,7 @@ try:  # pragma: no cover - depends on environment
                 Parameter("learning_rate", "log_float", (0.01, 0.5), 0.1),
                 Parameter("n_estimators", "int", (50, 400), 200),
                 Parameter("max_depth", "int", (3, 12), 6),
+                Parameter("class_balance", "categorical", ("none", "balanced"), "none"),
             ))
 
         def _build(self, config, seed):
