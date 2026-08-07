@@ -58,6 +58,29 @@ ceiling only), so search overrun can't starve the finalize pool.
 Cost: wall-time on expensive refits (wine 218s, cc-fraud 152s vs 120s stated);
 acceptable under the compute-free directive.
 
+## Iteration 5 — log-target transform for regression (INVESTIGATED, REJECTED)
+
+The biggest untapped *general* regression lever (heavy-tailed targets:
+melbourne, housing, forest-fires). Prototyped the export path: skl2onnx has no
+`TransformedTargetRegressor` shape calculator, so the inverse (`expm1`) must be
+appended to the fused graph by hand. It converts fine, **but the `exp()` inverse
+amplifies float32 tree-threshold drift** — measured parity on a HistGB log-target
+model: max row rel-diff **0.50**, r² native 0.478 vs ONNX 0.517. Log-target tree
+models would almost always fail the parity gate and ship non-deployable.
+Rejected before implementation — wrong fit for a deployability-first design.
+(A linear-only log-target would export cleanly but the gain is narrow.)
+
+## Iteration 6 — default-config search seeding (ROLLED BACK)
+
+Seed batch 1 with each method's library-default config (a known-good per-method
+baseline) to cut random-sampling variance. **Mixed, with regressions on the
+flagship imbalanced datasets** — the deterministic seeds consume exploration
+budget: cc-fraud auc 0.966→0.961, social-ads auc 0.919→0.912, pokemon secondary
+bal_acc 0.85→0.71; while melbourne r² 0.844→0.856 and zoo/pump improved. No
+systematic win and it risks the imbalance gains, so reverted. (Same fixed-budget
+dilution lesson as iter-3: on a time-bounded search, spending trials on fixed
+baselines trades away exploration.)
+
 ## Cumulative result (current build vs round-8c baseline)
 
 | Dataset | Task | round-8c | now | AMP |
@@ -87,21 +110,33 @@ tests 69 → 71, modules 17/17.
 - **wine ordinal ceiling** (f1 ~0.455): 7 overlapping quality levels treated as
   flat multiclass — an ordinal task mode is the lever, not balancing.
 
-## Deferred (identified, higher-risk — not done this loop)
+## Deferred / needs architectural change (not achievable as a safe in-loop tweak)
 
-- **Log/Box-Cox target transform** for heavy-tailed regression (would help
-  melbourne, housing, forest-fires). Requires baking the inverse (Exp) into the
-  fused ONNX graph — feasible (export already does graph surgery) but real
-  parity risk; deferred rather than destabilize a clean build.
-- **Probability calibration** and **stacked ensembling** — both add a CV wrapper
-  (search dilution, per iter-3's lesson) and/or ONNX-export complexity.
-- **Ordinal regression mode**, **time-aware splits** (pump temporal leakage),
-  **minimal text vectorizer** (spam-text) — carried from round-8.
+- **Log/Box-Cox target transform** — rejected in iter-5 (exp amplifies float32
+  parity drift). Would need a parity policy that scores the ONNX graph's own
+  metric rather than native-vs-ONNX fidelity, or a float64 inference path.
+- **Ordinal task mode** (wine, zoo, amazon quality/rating targets) — a new task
+  family / metric, not a tweak.
+- **Time-aware splits** (pump temporal leakage) — packager + split-policy work.
+- **Minimal text vectorizer** (spam-text) — new preprocessing modality.
+- **Probability calibration**, **stacked ensembling**, **more base learners** —
+  all add per-trial/per-method cost that dilutes a fixed-budget search (iters 3
+  & 6); only worthwhile with a larger trial budget or a smarter (non-random)
+  search strategy (the ADR-0006 Search-registry work).
 
-## Verdict
+## Convergence
 
-Four substantive iterations, one evidence-based rollback. The loop converged on
-diminishing returns for *safe, general* levers after iter-4: the remaining
-candidates all carry ONNX-export or search-dilution risk disproportionate to
-their expected gain, so they are deferred rather than forced. Net: large,
-general, deployment-preserving gains on imbalanced data with zero regressions.
+Six iterations: **three kept** (class-balancing, deployability-aware selection,
+full-pool finalize), **two rolled back** with evidence (ExtraTrees, default-config
+seeding — both fixed-budget dilution), **one investigated and rejected**
+pre-implementation (log-target — breaks ONNX parity). The consistent finding:
+class-balancing was the dominant available win, and under a fixed per-run search
+budget every remaining *quality* lever trades exploration for its addition, or
+trades deployability for its output. Further general gains now require an
+architectural change — a smarter search strategy (so added models/CV don't
+dilute) or a revised parity policy (so target transforms stay deployable) — not
+another in-loop tweak. The loop has converged.
+
+Net across the loop: large, general, deployment-preserving gains on imbalanced
+data (pump f1 0.67→0.9996, pokemon bal_acc 0.71→0.85, cc-fraud 0.80→0.90), wine
+recovered to deployable, **9/9 deployable, zero regressions**, tests 69→71.
