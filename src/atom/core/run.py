@@ -154,11 +154,12 @@ def run_package(
         orch.run(progress=progress)
         phases["search_s"] = round(budget.elapsed - phases["load_s"], 1)
 
-        # Finalize inside the reserved tail: refit top-K at full fidelity.
-        # BUG-2: breadth adapts to what is left of the budget — load/search
-        # already consumed their share.
-        top_k = TOP_K if budget.elapsed < wall_clock_s * 0.9 else 2
-        top = orch.best_trials(top_k)
+        # Finalize the full top-K at full fidelity. A broad, diverse pool is
+        # what lets deployability-aware selection (below) fall back to a
+        # parity-faithful model when the top scorer's fused graph drifts —
+        # so we keep all TOP_K, not a budget-shrunk 2. Reused search-time fits
+        # are free; fresh refits get a generous ceiling (the tail is soft).
+        top = orch.best_trials(TOP_K)
         if not top:
             sig, count, total = orch.error_summary()
             if total:  # failures, not slowness: say what actually broke
@@ -169,20 +170,18 @@ def run_package(
         progress(f"finalizing: up to {len(top)} candidates at full fidelity…")
         candidates, outputs, kept = [], [], []
         for t in top:
-            # Finalize honors the budget too: always produce >=1 candidate
-            # (never end without a usable artifact), stop adding more once
-            # the wall clock is spent.
+            # Always add reuse-available candidates (already fit — free). Cap
+            # only fresh refits, and only once at least one candidate exists,
+            # so a run never ends without a usable artifact.
+            reused = orch.get_fitted(t.spec.key())
             est = orch.trial_cost_estimate(t.spec.method["name"], 1.0)
-            over = (budget.elapsed >= wall_clock_s
-                    or (est is not None and orch.get_fitted(t.spec.key()) is None
-                        and budget.elapsed + est > wall_clock_s * 1.05))
-            if candidates and over:
-                progress(f"budget reached — finalizing with {len(candidates)} candidate(s)")
-                break
+            over = (reused is None and candidates
+                    and est is not None
+                    and budget.elapsed + est > wall_clock_s * 1.5)
+            if over:
+                continue  # skip this refit, but keep checking cheaper reuses
             try:
-                fitted = orch.get_fitted(t.spec.key())  # reuse search-time fit
-                if fitted is None:
-                    fitted = fit_pipeline(t.spec, orch.modules, train, 1.0, seed=t.seed)
+                fitted = reused or fit_pipeline(t.spec, orch.modules, train, 1.0, seed=t.seed)
                 candidates.append(fitted)
                 outputs.append(fitted.predict(val.X))
                 kept.append(t)  # stays index-aligned with candidates/outputs
@@ -207,21 +206,70 @@ def run_package(
         test = load_matrix(pkg, fp, "test", task.target, max_rows=max(max_rows // 2, 10_000),
                            seed=seed + 2)
         test_outputs = [c.predict(test.X) for c in candidates]
-        if use_ensemble:
-            final_kind = "ensemble"
-            for o in test_outputs:
-                o["_proba_global"] = None  # recomputed inside combine via classes
-            from atom.core.ensemble.greedy import _global_proba
+        from atom.core.ensemble.greedy import _global_proba
+        from atom.core.provenance.amp import export_amp
 
-            if ensemble.classes is not None:
-                for o in test_outputs:
-                    o["_proba_global"] = _global_proba(o, ensemble.classes)
-            final_test = ensemble.combine(test_outputs)
-            val_score = ens_score
+        writer = RunWriter(out_root, pkg.source.name)
+        parity_X, parity_y = _parity_sample(val, task)
+
+        def _combine_test():  # ensemble prediction on the locked test set
+            for o in test_outputs:
+                o["_proba_global"] = (_global_proba(o, ensemble.classes)
+                                      if ensemble.classes is not None else None)
+            return ensemble.combine(test_outputs)
+
+        # Deployment options ranked by val score. Deployability-aware selection,
+        # performance-first: ship the best-scoring candidate; only fall back to a
+        # parity-faithful one when it is within a small margin of the best
+        # (deployability is a tie-break, never a reason to give up real score —
+        # a model that scores 0.45 native / 0.44 ONNX still beats a faithful 0.30).
+        # Compute is free, so we try candidates in score order.
+        options = []
+        if use_ensemble:
+            options.append(("ensemble", None, ens_score))
+        options += [("single", i, singles[i]) for i in range(len(candidates))]
+        options.sort(key=lambda o: o[2], reverse=True)
+        best_score = options[0][2]
+        deploy_margin = 0.02 * max(abs(best_score), 1e-9)  # scale-free 2% band
+
+        def _export(kind, idx):
+            if kind == "ensemble":
+                cand, members = candidates, ensemble.members
+                classes = ensemble.classes
+            else:
+                cand, members = [candidates[idx]], None
+                classes = [str(c) for c in (test_outputs[idx].get("classes") or [])] or None
+            return export_amp(
+                run_dir=writer.dir, task=task.to_dict(), candidates=cand,
+                ensemble_members=members, classes=classes, features=train.features,
+                sample_X=parity_X, sample_y=parity_y,
+                lineage={"dataset_id": pkg.manifest.content_id,
+                         "dataset_name": pkg.manifest.name,
+                         "split": pkg.manifest.split.get("file"),
+                         "atom_run": writer.dir.name},
+                is_classifier=task.family is not TaskFamily.REGRESSION,
+                should_stop=lambda: budget.elapsed > wall_clock_s * 1.5)
+
+        chosen, amp = None, None
+        for kind, idx, score in options:
+            if best_score - score > deploy_margin:
+                break  # below the margin: no longer worth trading score for parity
+            amp = _export(kind, idx)
+            if amp["deployable"]:
+                chosen = (kind, idx, score)
+                break
+        if chosen is None:  # nothing near-best is faithful: ship the best (native-only ok)
+            chosen = options[0]
+            amp = _export(chosen[0], chosen[1])
+        final_kind, best_idx, val_score = chosen
+        use_ensemble = final_kind == "ensemble"
+        if not use_ensemble:
+            best_single_idx = best_idx
+
+        if use_ensemble:
+            final_test = _combine_test()
         else:
-            final_kind = "single"
             final_test = test_outputs[best_single_idx]
-            val_score = singles[best_single_idx]
         test_metrics = evaluator.score_predictions(
             test.y, final_test,
             X=evaluator.metric_features(
@@ -249,7 +297,6 @@ def run_package(
             task.notes.append(verdict)
             progress(f"WARNING {verdict}")
 
-        writer = RunWriter(out_root, pkg.source.name)
         writer.write_run({
             "package": {"id": pkg.manifest.content_id, "name": pkg.manifest.name,
                         "path": str(package_path)},
@@ -283,38 +330,12 @@ def run_package(
             "ensemble": ensemble if use_ensemble else None,
             "features": train.features,
         })
-        # AMP export (ADR-0004): fused ONNX graph(s) + parity gate. Failure
-        # never kills the run — deployable:false with native/ fallback.
-        from atom.core.provenance.amp import export_amp
-
-        parity_X, parity_y = _parity_sample(val, task)
-        amp_candidates = candidates if use_ensemble else [candidates[best_single_idx]]
-        amp = export_amp(
-            run_dir=writer.dir,
-            task=task.to_dict(),
-            candidates=amp_candidates,
-            ensemble_members=ensemble.members if use_ensemble else None,
-            classes=(ensemble.classes if use_ensemble else
-                     [str(c) for c in (test_outputs[best_single_idx].get("classes") or [])]
-                     or None),
-            features=train.features,
-            sample_X=parity_X,
-            sample_y=parity_y,
-            lineage={
-                "dataset_id": pkg.manifest.content_id,
-                "dataset_name": pkg.manifest.name,
-                "split": pkg.manifest.split.get("file"),
-                "atom_run": writer.dir.name,
-            },
-            is_classifier=task.family is not TaskFamily.REGRESSION,
-            should_stop=lambda: budget.elapsed > wall_clock_s * 1.2,
-        )
-        phases["export_s"] = round(
-            budget.elapsed - sum(phases.values()), 1)
+        phases["export_s"] = round(budget.elapsed - sum(phases.values()), 1)
         progress("phases: " + "  ".join(f"{k}={v}s" for k, v in phases.items()))
         progress(f"AMP: deployable={amp['deployable']} "
                  f"({len(amp['graphs'])} ONNX graph(s), parity "
-                 f"{'ok' if all(p.get('pass') for p in amp['parity']) else 'FAILED'})")
+                 f"{'ok' if all(p.get('pass') for p in amp['parity']) else 'FAILED'}"
+                 f", selected {final_kind})")
         writer.close()
 
         # Store the flywheel record: fingerprint summary -> winning config.
