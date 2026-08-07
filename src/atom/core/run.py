@@ -170,16 +170,18 @@ def run_package(
         progress(f"finalizing: up to {len(top)} candidates at full fidelity…")
         candidates, outputs, kept = [], [], []
         for t in top:
-            # Always add reuse-available candidates (already fit — free). Cap
-            # only fresh refits, and only once at least one candidate exists,
-            # so a run never ends without a usable artifact.
+            # Finalize the whole pool: a diverse full-fidelity set is what feeds
+            # selection + ensembling, and search overrun must not starve it.
+            # Compute is not the constraint; only a generous anti-hang ceiling
+            # (3x budget) guards a pathologically slow refit once we already
+            # have a usable candidate.
             reused = orch.get_fitted(t.spec.key())
             est = orch.trial_cost_estimate(t.spec.method["name"], 1.0)
-            over = (reused is None and candidates
-                    and est is not None
-                    and budget.elapsed + est > wall_clock_s * 1.5)
-            if over:
-                continue  # skip this refit, but keep checking cheaper reuses
+            runaway = (reused is None and candidates
+                       and est is not None
+                       and budget.elapsed + est > wall_clock_s * 3.0)
+            if runaway:
+                continue
             try:
                 fitted = reused or fit_pipeline(t.spec, orch.modules, train, 1.0, seed=t.seed)
                 candidates.append(fitted)
