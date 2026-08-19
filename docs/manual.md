@@ -20,18 +20,28 @@ every subcommand, flag, output, and the common workflows.
 
 ### 1.1 Self-contained installer (recommended for lab / shared machines)
 
+**Fresh machine** (also installs OS prerequisites via brew/dnf/apt — macOS,
+RHEL 10, Debian 13):
+
 ```bash
 git clone <atom-repo> && cd atom
+bash scripts/setup.sh        # OS packages + ATOM + health check  (--yes for non-interactive)
+source ~/.bashrc             # Linux (bash)  ·  ~/.zshrc on macOS
+bash scripts/sample_run.sh   # sample end-to-end test
+```
+
+**Python 3.10+ already present** — install just ATOM (no OS packages):
+
+```bash
 bash scripts/install.sh
-source ~/.bashrc     # Linux (bash)
-source ~/.zshrc      # macOS (zsh)
+source ~/.bashrc     # Linux (bash)  ·  ~/.zshrc on macOS
 atom modules verify  # self-test
 ```
 
 Installs everything under `~/atom` (private virtualenv, launcher, config, data,
 runs) with **no root on Linux**. See `docs/install.md` for the folder layout,
-`--prefix`, `--no-rc`, and `--uninstall` options. Re-running upgrades in place
-and preserves `~/atom/config/atom.env`.
+`--prefix`, `--no-rc`, `--no-system`, and `--uninstall` options. Re-running
+upgrades in place and preserves `~/atom/config/atom.env`.
 
 ### 1.2 pip install (for developers / embedding in another app)
 

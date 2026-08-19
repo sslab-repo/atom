@@ -1,7 +1,32 @@
 # Installing ATOM
 
-One script, two platforms, everything self-contained in one folder in your
-home directory — no system-wide changes, no root on Linux.
+Two ways to install, depending on whether the machine already has Python 3.10+.
+
+## A. Fresh machine — `setup.sh` (installs OS packages too)
+
+Installs the **system prerequisites** (Python, pip, venv, OpenMP runtime, git)
+via the platform package manager, then installs ATOM, then runs a health check.
+Supports **macOS** (Homebrew), **RHEL 10 / Rocky / AlmaLinux / Fedora** (dnf),
+and **Debian 13 / Ubuntu** (apt). System packages need sudo on Linux; ATOM
+itself installs per-user under `~/atom` (no root).
+
+```bash
+git clone <atom-repo> && cd atom
+bash scripts/setup.sh                 # add --yes for non-interactive
+source ~/.bashrc                      # Linux (bash)   ·   ~/.zshrc on macOS
+bash scripts/sample_run.sh            # sample end-to-end test
+```
+
+At the end it prints a **HEALTH CHECK** report (Python, core libraries, the
+`atom` command, module smoke gate, and a full pack→inspect→run→ONNX test).
+
+Options: `--yes` (non-interactive), `--no-system` (skip OS packages — Python is
+already present), `--no-rc` (don't touch shell rc files), `--prefix DIR`.
+
+## B. Python already present — `install.sh` (per-user only)
+
+If the machine already has Python 3.10+, install just ATOM (no OS packages, no
+root on Linux):
 
 ```bash
 git clone <atom-repo> && cd atom

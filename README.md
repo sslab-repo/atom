@@ -99,7 +99,10 @@ atom/
 ## Installation
 
 ```bash
-bash scripts/install.sh   # RHEL 10 (user account, bash) & macOS (zsh)
+bash scripts/setup.sh     # fresh machine: OS packages + ATOM + health check
+                          #   macOS (brew), RHEL 10/Rocky/Alma/Fedora (dnf), Debian 13/Ubuntu (apt)
+bash scripts/install.sh   # Python 3.10+ already present: per-user ATOM only (no root on Linux)
+bash scripts/sample_run.sh  # sample end-to-end test after install
 ```
 
 Self-contained under `~/atom` — sources, venv, config, data, runs, meta-KB.
