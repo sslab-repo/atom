@@ -105,6 +105,18 @@ bash scripts/install.sh   # RHEL 10 (user account, bash) & macOS (zsh)
 Self-contained under `~/atom` — sources, venv, config, data, runs, meta-KB.
 Details: [`docs/install.md`](docs/install.md).
 
+## Using the `atom` command
+
+Full command manual (Linux + macOS): [`docs/manual.md`](docs/manual.md) —
+every subcommand, flag, output, serving the ONNX model package, and recipes.
+
+```bash
+atom pack mydata.csv --target label --out pkgs   # CSV -> ATOM Dataset Package
+atom inspect pkgs/mydata                          # profile it
+atom run pkgs/mydata --time-budget 120 --yes      # train -> deployable ONNX package
+atom modules verify                               # health check
+```
+
 ## Status
 
 **Design phase complete (2026-07-14) — implementation starting.**
