@@ -46,7 +46,7 @@ def pack_images(folder: str | Path, out_dir: str | Path, name: str | None = None
                       "detected_type": rel.suffix.lstrip(".").lower(), "role": "data"})
         if label:
             label_counts[label] = label_counts.get(label, 0) + 1
-        buckets[_hash_split(str(rel))].append(
+        buckets[_hash_split(str(rel), SPLIT_RATIOS)].append(
             {"id": str(rel), "path": f"raw/{rel}", "label": label,
              "size_bytes": dest.stat().st_size})
 

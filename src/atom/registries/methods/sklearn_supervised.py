@@ -151,6 +151,33 @@ class HistGBClassifierM(_Supervised):
             early_stopping=False)  # auto-ES stratified-splits; breaks on 1-member classes
 
 
+@register
+class MLPClassifierM(_Supervised):
+    """Feed-forward neural network (multi-layer perceptron) — the deep-learning
+    classifier for TABULAR data. Searched and compared head-to-head with the
+    classical methods by `atom run`; exports to ONNX like the rest. (No
+    class_balance dim: MLPClassifier.fit takes no sample_weight.)"""
+
+    FAMILY, NAME, CATEGORY = TaskFamily.CLASSIFICATION, "neural-net-mlp", "neural-network"
+
+    def space(self) -> SearchSpace:
+        return SearchSpace((
+            Parameter("hidden_layer_sizes", "categorical",
+                      ("64", "128,64", "256,128", "256,128,64"), "128,64"),
+            Parameter("alpha", "log_float", (1e-6, 1e-1), 1e-4),
+            Parameter("learning_rate_init", "log_float", (1e-4, 1e-2), 1e-3),
+        ))
+
+    def _build(self, config, seed):
+        from sklearn.neural_network import MLPClassifier
+
+        hls = tuple(int(x) for x in str(config.get("hidden_layer_sizes", "128,64")).split(","))
+        return MLPClassifier(
+            hidden_layer_sizes=hls, alpha=config.get("alpha", 1e-4),
+            learning_rate_init=config.get("learning_rate_init", 1e-3),
+            max_iter=300, early_stopping=True, random_state=seed)
+
+
 # --- regression ------------------------------------------------------------
 
 @register

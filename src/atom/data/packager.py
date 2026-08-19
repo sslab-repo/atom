@@ -14,16 +14,48 @@ import json
 import shutil
 from pathlib import Path
 
-SPLIT_RATIOS = {"train": 0.8, "val": 0.1, "test": 0.1}
+SPLIT_RATIOS = {"train": 0.8, "val": 0.1, "test": 0.1}  # default
 SPLIT_SEED = 42
 
 
-def _hash_split(sample_id: str, seed: int = SPLIT_SEED) -> str:
+def resolve_split(spec: str | None, n_rows: int) -> tuple[dict[str, float], str]:
+    """Turn a --split spec into (ratios, mode).
+
+    spec: None -> default 80/10/10; "auto" -> size-based heuristic;
+    "0.7/0.15/0.15" (or "70/15/15") -> custom train/val/test, normalized.
+    A validation split is always kept — ATOM selects the model on it."""
+    if spec is None:
+        return dict(SPLIT_RATIOS), "default"
+    if spec.strip().lower() == "auto":
+        # more data -> a smaller test fraction still gives a reliable estimate;
+        # less data -> keep val/test large enough to be stable.
+        if n_rows < 1_000:
+            r = (0.70, 0.15, 0.15)
+        elif n_rows < 100_000:
+            r = (0.80, 0.10, 0.10)
+        else:
+            r = (0.90, 0.05, 0.05)
+        return {"train": r[0], "val": r[1], "test": r[2]}, f"auto(n={n_rows})"
+    parts = spec.split("/")
+    if len(parts) != 3:
+        raise ValueError(
+            f"--split must be TRAIN/VAL/TEST (e.g. 0.7/0.15/0.15) or 'auto', got {spec!r}")
+    try:
+        vals = [float(p) for p in parts]
+    except ValueError as exc:
+        raise ValueError(f"--split ratios must be numbers, got {spec!r}") from exc
+    if any(v <= 0 for v in vals):
+        raise ValueError("--split ratios must all be > 0 (a validation split is required)")
+    total = sum(vals)
+    return {"train": vals[0] / total, "val": vals[1] / total, "test": vals[2] / total}, "custom"
+
+
+def _hash_split(sample_id: str, ratios: dict[str, float], seed: int = SPLIT_SEED) -> str:
     digest = hashlib.sha256(f"{seed}:{sample_id}".encode()).digest()
     frac = int.from_bytes(digest[:8], "big") / 2**64
-    if frac < SPLIT_RATIOS["train"]:
+    if frac < ratios["train"]:
         return "train"
-    if frac < SPLIT_RATIOS["train"] + SPLIT_RATIOS["val"]:
+    if frac < ratios["train"] + ratios["val"]:
         return "val"
     return "test"
 
@@ -89,8 +121,12 @@ def pack_csv(
     name: str | None = None,
     target: str | None = None,
     id_column: str = "sample_id",
+    split: str | None = None,
 ) -> Path:
-    """Build an ADP folder from one CSV. Returns the package root path."""
+    """Build an ADP folder from one CSV. Returns the package root path.
+
+    split: train/val/test ratios — None (default 80/10/10), 'auto' (size-based),
+    or 'TRAIN/VAL/TEST' e.g. '0.7/0.15/0.15'."""
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -110,19 +146,22 @@ def pack_csv(
         if target is not None and target not in columns:
             raise ValueError(f"target column {target!r} not in CSV header")
         all_columns = columns + [id_column]
-        buckets = {s: {c: [] for c in all_columns} for s in SPLIT_RATIOS}
-        counts = {s: 0 for s in SPLIT_RATIOS}
+        records = list(reader)   # materialize so 'auto' can size the split
+        ratios, split_mode = resolve_split(split, len(records))
+        buckets = {s: {c: [] for c in all_columns} for s in ratios}
+        counts = {s: 0 for s in ratios}
         label_counts: dict[str, int] = {}
-        for idx, record in enumerate(reader):
+        tgt_idx = columns.index(target) if target is not None else -1
+        for idx, record in enumerate(records):
             sid = f"{csv_path.name}#{idx}"
-            split = _hash_split(sid)
-            counts[split] += 1
-            bucket = buckets[split]
+            sp = _hash_split(sid, ratios)
+            counts[sp] += 1
+            bucket = buckets[sp]
             for i, col in enumerate(columns):
                 bucket[col].append(record[i] if i < len(record) else "")
             bucket[id_column].append(sid)
             if target is not None:
-                v = record[columns.index(target)] if columns.index(target) < len(record) else ""
+                v = record[tgt_idx] if tgt_idx < len(record) else ""
                 label_counts[v] = label_counts.get(v, 0) + 1
 
     # typed schema from a sample of train values (ADR-0003: processed is typed)
@@ -157,8 +196,9 @@ def pack_csv(
     split_doc = {
         "version": "split_v1",
         "method": "hash",
+        "mode": split_mode,
         "seed": SPLIT_SEED,
-        "ratios": SPLIT_RATIOS,
+        "ratios": {k: round(v, 6) for k, v in ratios.items()},
         "id_scheme": "<raw file name>#<0-based row index>",
         "counts": {**counts, "total": sum(counts.values())},
         "ids_included": False,
@@ -188,7 +228,8 @@ def pack_csv(
         "labels": (
             [{"column": target, "classes": dict(sorted(label_counts.items()))}] if target else []
         ),
-        "split": {"method": "hash", "seed": SPLIT_SEED, "ratios": SPLIT_RATIOS,
+        "split": {"method": "hash", "mode": split_mode, "seed": SPLIT_SEED,
+                  "ratios": {k: round(v, 6) for k, v in ratios.items()},
                   "file": "splits/split_v1.json"},
         "files": [
             {

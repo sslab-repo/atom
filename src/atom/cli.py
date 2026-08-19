@@ -187,25 +187,29 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
     if args.file:
         csvs = [c for c in csvs if os.path.basename(c) == args.file] or csvs
     name = args.name or slug.replace("/", "-")
-    root = _pack_csv_with_help(csvs[0], args.out, name=name, target=args.target)
+    root = _pack_csv_with_help(csvs[0], args.out, name=name, target=args.target,
+                               split=getattr(args, "split", None))
     print(f"fetched {slug} ({os.path.basename(csvs[0])}) -> ADP: {root}")
     return 0
 
 
 def _cmd_pack(args: argparse.Namespace) -> int:
-    root = _pack_csv_with_help(args.csv, args.out, name=args.name, target=args.target)
+    root = _pack_csv_with_help(args.csv, args.out, name=args.name, target=args.target,
+                               split=args.split)
     print(f"wrote ADP: {root}")
     return 0
 
 
-def _pack_csv_with_help(csv_path, out, name, target):
+def _pack_csv_with_help(csv_path, out, name, target, split=None):
     """pack_csv, but a wrong --target dies with the header + a suggestion
     instead of a traceback (grad-admissions: 'Chance of Admit ' vs no space)."""
     from atom.data import pack_csv
 
     try:
-        return pack_csv(csv_path, out, name=name, target=target)
+        return pack_csv(csv_path, out, name=name, target=target, split=split)
     except ValueError as exc:
+        if "--split" in str(exc):  # bad ratio spec: show the message plainly
+            raise SystemExit(str(exc)) from exc
         if not (target and "not in CSV header" in str(exc)):
             raise
         import csv as _csv
@@ -278,6 +282,9 @@ def main(argv: list[str] | None = None) -> int:
     p_pack.add_argument("--out", "-o", default=".", help="output directory")
     p_pack.add_argument("--name", help="package name (default: CSV stem)")
     p_pack.add_argument("--target", help="target/label column name")
+    p_pack.add_argument("--split", metavar="TRAIN/VAL/TEST",
+                        help="split ratios e.g. 0.7/0.15/0.15, or 'auto' (size-based); "
+                             "default 0.8/0.1/0.1")
     p_pack.set_defaults(func=_cmd_pack)
 
     p_fetch = sub.add_parser("fetch", help="fetch kaggle:<slug> and convert to an ADP")
@@ -286,6 +293,8 @@ def main(argv: list[str] | None = None) -> int:
     p_fetch.add_argument("--file", help="specific CSV inside the dataset (default: largest)")
     p_fetch.add_argument("--name")
     p_fetch.add_argument("--out", "-o", default=".")
+    p_fetch.add_argument("--split", metavar="TRAIN/VAL/TEST",
+                         help="split ratios e.g. 0.7/0.15/0.15, or 'auto'; default 0.8/0.1/0.1")
     p_fetch.set_defaults(func=_cmd_fetch)
 
     p_pimg = sub.add_parser("pack-images",

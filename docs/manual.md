@@ -112,6 +112,12 @@ atom pack <csv> [--target COL] [--name NAME] [--out DIR]
 | `--target COL` | none | label/target column; omit for unlabeled data (clustering/anomaly) |
 | `--name NAME` | CSV stem | package name |
 | `--out DIR`, `-o` | `.` | output directory |
+| `--split TRAIN/VAL/TEST` | `0.8/0.1/0.1` | split ratios, e.g. `0.7/0.15/0.15` (normalized); or `auto` (size-based) |
+
+`--split` controls the train / validation / test partition (a deterministic
+hash split). A **validation** split is always kept — ATOM selects the model on
+it, so all three fractions must be > 0. `auto` picks by dataset size:
+`< 1k rows → 70/15/15`, `1k–100k → 80/10/10`, `≥ 100k → 90/5/5`.
 
 Handles messy real-world CSVs automatically: dirty numerics (`"N/A"`, `"?"`,
 `"1,234"`, `"$50"`, `"27,3"` locale decimals), datetime columns (expanded to
@@ -121,7 +127,8 @@ available columns and a suggestion.
 
 ```bash
 atom pack sales.csv --target revenue --name sales --out packages/
-# → wrote ADP: packages/sales
+atom pack sales.csv --target revenue --split 0.7/0.15/0.15    # custom ratio
+atom pack sales.csv --target revenue --split auto             # size-based
 ```
 
 ### 3.2 `atom fetch` — Kaggle dataset → ADP
