@@ -16,7 +16,8 @@ venv/
 htmlcov/
 
 # Data & experiment artifacts (never commit datasets or model weights)
-data/
+# Anchored to repo root so it does NOT match the src/atom/data/ package.
+/data/
 *.ckpt
 *.pt
 *.onnx
