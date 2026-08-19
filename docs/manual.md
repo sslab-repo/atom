@@ -351,9 +351,14 @@ batch script; ATOM uses the cores the job is given.
 #!/bin/bash
 #SBATCH -c 8 --mem=16G -t 00:30:00
 export ATOM_HOME=/scratch/$USER/atom
+export OMP_NUM_THREADS=$SLURM_CPUS_PER_TASK LOKY_MAX_CPU_COUNT=$SLURM_CPUS_PER_TASK
 atom run "$DATA/pkgs/study" --time-budget 600 --max-rows 2000000 \
          --out "$RESULTS" --yes
 ```
+
+**Many datasets on a cluster** → run them as a Slurm job array (one dataset per
+array task). Full guide + ready-to-run scripts:
+[`docs/slurm.md`](slurm.md) and [`scripts/slurm/`](../scripts/slurm/).
 
 ### 7.4 Reproducibility
 

@@ -109,6 +109,8 @@ Details: [`docs/install.md`](docs/install.md).
 
 Full command manual (Linux + macOS): [`docs/manual.md`](docs/manual.md) —
 every subcommand, flag, output, serving the ONNX model package, and recipes.
+Running many datasets on a cluster: [`docs/slurm.md`](docs/slurm.md) (Slurm job
+arrays + ready-to-run scripts in [`scripts/slurm/`](scripts/slurm/)).
 
 ```bash
 atom pack mydata.csv --target label --out pkgs   # CSV -> ATOM Dataset Package

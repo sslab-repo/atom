@@ -1,0 +1,5 @@
+name	package	target	task	time_budget	max_rows
+credit	pkgs/credit	default	classification	300	2000000
+housing	pkgs/housing	SalePrice	regression	300	2000000
+segments	pkgs/segments		clustering	180	2000000
+sensors	pkgs/sensors			600	10000000
