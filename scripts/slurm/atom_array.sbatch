@@ -50,11 +50,12 @@ if [ -f "$outdir/.done" ]; then
 fi
 
 # --- optional flags: empty target => unlabeled; empty task => inferred ---
+# `${arr[@]+"${arr[@]}"}` expands safely when empty (bash 3.2 + `set -u`).
 targ=(); [ -n "${target:-}" ] && targ=(--target "$target")
 tsk=();  [ -n "${task:-}"   ] && tsk=(--task "$task")
 
 echo "[$name] package=$package budget=${budget:-120}s cpus=${SLURM_CPUS_PER_TASK:-?} host=$(hostname)"
-atom run "$package" "${targ[@]}" "${tsk[@]}" \
+atom run "$package" ${targ[@]+"${targ[@]}"} ${tsk[@]+"${tsk[@]}"} \
     --time-budget "${budget:-120}" --max-rows "${maxrows:-2000000}" \
     --out "$outdir" --kb "$KBROOT/task-${task_id}" \
     --seed 0 --yes

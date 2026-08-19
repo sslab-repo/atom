@@ -1,4 +1,4 @@
-"""ATOM CLI. M1 commands: inspect, pack."""
+"""ATOM CLI: inspect, run, modules, pack, fetch, pack-images."""
 
 from __future__ import annotations
 

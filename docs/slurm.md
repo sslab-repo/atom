@@ -14,6 +14,7 @@ ready-to-run example scripts in [`scripts/slurm/`](../scripts/slurm/).
 
 ```bash
 # 1. On the LOGIN node (has network + shared FS): build the dataset packages
+mkdir -p logs                          # Slurm writes job logs here but won't create it
 bash scripts/slurm/prepare.sh          # pack CSVs / fetch Kaggle -> $DATA/pkgs
 
 # 2. Submit one array task per dataset (N = number of data lines in the manifest)
@@ -157,7 +158,7 @@ targ=(); [ -n "${target:-}" ] && targ=(--target "$target")
 tsk=();  [ -n "${task:-}"   ] && tsk=(--task "$task")
 
 echo "[$name] package=$package budget=${budget}s cpus=${SLURM_CPUS_PER_TASK:-?}"
-atom run "$package" "${targ[@]}" "${tsk[@]}" \
+atom run "$package" ${targ[@]+"${targ[@]}"} ${tsk[@]+"${tsk[@]}"} \
     --time-budget "${budget:-120}" --max-rows "${maxrows:-2000000}" \
     --out "$outdir" --kb "$KBROOT/task-$SLURM_ARRAY_TASK_ID" \
     --seed 0 --yes
@@ -264,7 +265,7 @@ tail -n +2 scripts/slurm/datasets.tsv | while IFS= read -r line; do
   task=$(cut -f4 <<<"$line"); budget=$(cut -f5 <<<"$line"); maxrows=$(cut -f6 <<<"$line")
   targ=(); [ -n "$target" ] && targ=(--target "$target")
   tsk=();  [ -n "$task" ]   && tsk=(--task "$task")
-  atom run "$pkg" "${targ[@]}" "${tsk[@]}" --time-budget "${budget:-120}" \
+  atom run "$pkg" ${targ[@]+"${targ[@]}"} ${tsk[@]+"${tsk[@]}"} --time-budget "${budget:-120}" \
       --max-rows "${maxrows:-2000000}" --out "$HOME/atom/runs/$name" --yes
 done
 ```

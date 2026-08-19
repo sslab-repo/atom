@@ -11,7 +11,7 @@ set -euo pipefail
 ATOM_ROOT=${ATOM_ROOT:-$HOME/atom}
 export PATH="$ATOM_ROOT/bin:$PATH"        # or: source /path/to/.venv/bin/activate
 PKGS=${PKGS:-pkgs}
-mkdir -p "$PKGS"
+mkdir -p "$PKGS" logs                     # logs/ must exist before the array (Slurm won't create it)
 
 # --- 1. Local CSVs -> ADP -----------------------------------------------------
 # atom pack <csv> --target <col> --name <name> --out $PKGS

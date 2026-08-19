@@ -110,7 +110,9 @@ log "installing ATOM (per-user, no root)"
 INSTALL_ARGS=()
 [ -n "$PREFIX" ] && INSTALL_ARGS+=(--prefix "$PREFIX")
 [ "$DO_RC" -eq 0 ] && INSTALL_ARGS+=(--no-rc)
-bash "$SRC_ROOT/scripts/install.sh" "${INSTALL_ARGS[@]}"
+# empty-array-safe expansion: macOS ships bash 3.2, where "${arr[@]}" on an
+# empty array under `set -u` raises "unbound variable".
+bash "$SRC_ROOT/scripts/install.sh" ${INSTALL_ARGS[@]+"${INSTALL_ARGS[@]}"}
 
 ATOM_ROOT="${PREFIX:-$HOME/atom}"
 ATOM_BIN="$ATOM_ROOT/bin/atom"
@@ -119,17 +121,18 @@ ATOM_BIN="$ATOM_ROOT/bin/atom"
 # ------------------------------------------------------ health check
 printf '\n%s========================  HEALTH CHECK  ========================%s\n' "${BOLD}" "${NC}"
 pass=0; fail=0
+HC_LOG="$(mktemp 2>/dev/null || echo "${TMPDIR:-/tmp}/atom_hc.$$")"
+trap 'rm -f "$HC_LOG"' EXIT
 check() { # name, command...
   local name="$1"; shift
-  if "$@" >/tmp/atom_hc.$$ 2>&1; then
-    printf '  %s✔%s  %-34s %s\n' "$GREEN" "$NC" "$name" "$(tail -n1 /tmp/atom_hc.$$ 2>/dev/null | cut -c1-40)"
+  if "$@" >"$HC_LOG" 2>&1; then
+    printf '  %s✔%s  %-34s %s\n' "$GREEN" "$NC" "$name" "$(tail -n1 "$HC_LOG" 2>/dev/null | cut -c1-40)"
     pass=$((pass+1))
   else
     printf '  %sx%s  %-34s %sFAILED%s\n' "$RED" "$NC" "$name" "$RED" "$NC"
-    sed 's/^/       /' /tmp/atom_hc.$$ | tail -n3
+    sed 's/^/       /' "$HC_LOG" | tail -n3
     fail=$((fail+1))
   fi
-  rm -f /tmp/atom_hc.$$
 }
 
 PYV="$("$ATOM_ROOT/venv/bin/python" -c 'import sys;print(".".join(map(str,sys.version_info[:3])))' 2>/dev/null || echo '?')"
