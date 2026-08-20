@@ -178,6 +178,187 @@ class MLPClassifierM(_Supervised):
             max_iter=300, early_stopping=True, random_state=seed)
 
 
+# --- more classical / DL classifiers (all export to ONNX) ------------------
+# class_balance is included ONLY where the estimator's fit accepts sample_weight
+# (KNN / LDA / QDA do not, so they omit it — the run() shell adds sample_weight
+# only when class_balance == "balanced").
+
+@register
+class KNNClassifierM(_Supervised):
+    FAMILY, NAME, CATEGORY = TaskFamily.CLASSIFICATION, "k-nearest-neighbors", "instance-based"
+
+    def space(self) -> SearchSpace:
+        return SearchSpace((
+            Parameter("n_neighbors", "int", (3, 50), 5),
+            Parameter("weights", "categorical", ("uniform", "distance"), "uniform"),
+        ))
+
+    def _build(self, config, seed):
+        from sklearn.neighbors import KNeighborsClassifier
+
+        return KNeighborsClassifier(n_neighbors=config.get("n_neighbors", 5),
+                                    weights=config.get("weights", "uniform"), n_jobs=-1)
+
+
+@register
+class SVMClassifierM(_Supervised):
+    FAMILY, NAME, CATEGORY = TaskFamily.CLASSIFICATION, "support-vector-machine", "kernel"
+
+    def space(self) -> SearchSpace:
+        return SearchSpace((
+            Parameter("C", "log_float", (1e-2, 1e2), 1.0),
+            Parameter("gamma", "categorical", ("scale", "auto"), "scale"),
+            Parameter("class_balance", "categorical", ("none", "balanced"), "none"),
+        ))
+
+    def _build(self, config, seed):
+        from sklearn.svm import SVC
+
+        return SVC(C=config.get("C", 1.0), gamma=config.get("gamma", "scale"),
+                   kernel="rbf", probability=True, random_state=seed)
+
+
+@register
+class GaussianNBM(_Supervised):
+    FAMILY, NAME, CATEGORY = TaskFamily.CLASSIFICATION, "gaussian-naive-bayes", "probabilistic"
+
+    def space(self) -> SearchSpace:
+        return SearchSpace((
+            Parameter("var_smoothing", "log_float", (1e-11, 1e-6), 1e-9),
+            Parameter("class_balance", "categorical", ("none", "balanced"), "none"),
+        ))
+
+    def _build(self, config, seed):
+        from sklearn.naive_bayes import GaussianNB
+
+        return GaussianNB(var_smoothing=config.get("var_smoothing", 1e-9))
+
+
+@register
+class ExtraTreesM(_Supervised):
+    FAMILY, NAME, CATEGORY = TaskFamily.CLASSIFICATION, "extra-trees", "ensemble-bagging"
+
+    def space(self) -> SearchSpace:
+        return SearchSpace((
+            Parameter("n_estimators", "int", (100, 400), 200),
+            Parameter("max_depth", "int", (5, 40), 20),
+            Parameter("min_samples_leaf", "int", (1, 20), 1),
+            Parameter("class_balance", "categorical", ("none", "balanced"), "none"),
+        ))
+
+    def _build(self, config, seed):
+        from sklearn.ensemble import ExtraTreesClassifier
+
+        return ExtraTreesClassifier(
+            n_estimators=config.get("n_estimators", 200), max_depth=config.get("max_depth"),
+            min_samples_leaf=config.get("min_samples_leaf", 1), n_jobs=-1, random_state=seed)
+
+
+@register
+class GradientBoostingM(_Supervised):
+    FAMILY, NAME, CATEGORY = TaskFamily.CLASSIFICATION, "gradient-boosting", "ensemble-boosting"
+
+    def space(self) -> SearchSpace:
+        return SearchSpace((
+            Parameter("learning_rate", "log_float", (0.01, 0.5), 0.1),
+            Parameter("n_estimators", "int", (50, 300), 100),
+            Parameter("max_depth", "int", (2, 6), 3),
+            Parameter("class_balance", "categorical", ("none", "balanced"), "none"),
+        ))
+
+    def _build(self, config, seed):
+        from sklearn.ensemble import GradientBoostingClassifier
+
+        return GradientBoostingClassifier(
+            learning_rate=config.get("learning_rate", 0.1),
+            n_estimators=config.get("n_estimators", 100),
+            max_depth=config.get("max_depth", 3), random_state=seed)
+
+
+@register
+class AdaBoostM(_Supervised):
+    FAMILY, NAME, CATEGORY = TaskFamily.CLASSIFICATION, "adaboost", "ensemble-boosting"
+
+    def space(self) -> SearchSpace:
+        return SearchSpace((
+            Parameter("n_estimators", "int", (50, 300), 100),
+            Parameter("learning_rate", "log_float", (0.1, 2.0), 1.0),
+            Parameter("class_balance", "categorical", ("none", "balanced"), "none"),
+        ))
+
+    def _build(self, config, seed):
+        from sklearn.ensemble import AdaBoostClassifier
+
+        return AdaBoostClassifier(
+            n_estimators=config.get("n_estimators", 100),
+            learning_rate=config.get("learning_rate", 1.0), random_state=seed)
+
+
+@register
+class SGDClassifierM(_Supervised):
+    FAMILY, NAME, CATEGORY = TaskFamily.CLASSIFICATION, "sgd-classifier", "linear"
+
+    def space(self) -> SearchSpace:
+        return SearchSpace((
+            Parameter("alpha", "log_float", (1e-6, 1e-2), 1e-4),
+            Parameter("class_balance", "categorical", ("none", "balanced"), "none"),
+        ))
+
+    def _build(self, config, seed):
+        from sklearn.linear_model import SGDClassifier
+
+        return SGDClassifier(loss="log_loss", alpha=config.get("alpha", 1e-4),
+                             max_iter=1000, random_state=seed)  # log_loss => predict_proba
+
+
+@register
+class LDAClassifierM(_Supervised):
+    FAMILY, NAME, CATEGORY = (TaskFamily.CLASSIFICATION,
+                              "linear-discriminant-analysis", "discriminant")
+
+    def space(self) -> SearchSpace:
+        return SearchSpace((Parameter("solver", "categorical", ("svd", "lsqr"), "svd"),))
+
+    def _build(self, config, seed):
+        from sklearn.discriminant_analysis import LinearDiscriminantAnalysis
+
+        return LinearDiscriminantAnalysis(solver=config.get("solver", "svd"))
+
+
+@register
+class QDAClassifierM(_Supervised):
+    FAMILY, NAME, CATEGORY = (TaskFamily.CLASSIFICATION,
+                              "quadratic-discriminant-analysis", "discriminant")
+
+    def space(self) -> SearchSpace:
+        return SearchSpace((Parameter("reg_param", "float", (0.0, 1.0), 0.0),))
+
+    def _build(self, config, seed):
+        from sklearn.discriminant_analysis import QuadraticDiscriminantAnalysis
+
+        return QuadraticDiscriminantAnalysis(reg_param=config.get("reg_param", 0.0))
+
+
+@register
+class PerceptronM(_Supervised):
+    """Classic single-layer perceptron (linear). Hard-label output (no
+    predict_proba): scored on macro-F1/accuracy — for binary ROC-AUC tasks
+    prefer sgd-classifier or logistic-regression, which output probabilities."""
+
+    FAMILY, NAME, CATEGORY = TaskFamily.CLASSIFICATION, "perceptron", "linear"
+
+    def space(self) -> SearchSpace:
+        return SearchSpace((
+            Parameter("alpha", "log_float", (1e-6, 1e-2), 1e-4),
+            Parameter("class_balance", "categorical", ("none", "balanced"), "none"),
+        ))
+
+    def _build(self, config, seed):
+        from sklearn.linear_model import Perceptron
+
+        return Perceptron(alpha=config.get("alpha", 1e-4), max_iter=1000, random_state=seed)
+
+
 # --- regression ------------------------------------------------------------
 
 @register
@@ -253,5 +434,32 @@ try:  # pragma: no cover - depends on environment
                 learning_rate=config.get("learning_rate", 0.1),
                 n_estimators=config.get("n_estimators", 200),
                 max_depth=config.get("max_depth", 6), n_jobs=-1, random_state=seed)
+except ImportError:
+    pass
+
+
+try:  # pragma: no cover - depends on environment
+    import lightgbm  # noqa: F401
+
+    @register
+    class LightGBMM(_Supervised):
+        FAMILY, NAME, CATEGORY = TaskFamily.CLASSIFICATION, "lightgbm", "ensemble-boosting"
+
+        def space(self) -> SearchSpace:
+            return SearchSpace((
+                Parameter("learning_rate", "log_float", (0.01, 0.5), 0.1),
+                Parameter("n_estimators", "int", (50, 400), 200),
+                Parameter("num_leaves", "int", (15, 255), 31),
+                Parameter("class_balance", "categorical", ("none", "balanced"), "none"),
+            ))
+
+        def _build(self, config, seed):
+            from lightgbm import LGBMClassifier
+
+            return LGBMClassifier(
+                learning_rate=config.get("learning_rate", 0.1),
+                n_estimators=config.get("n_estimators", 200),
+                num_leaves=config.get("num_leaves", 31), n_jobs=-1,
+                random_state=seed, verbose=-1)
 except ImportError:
     pass

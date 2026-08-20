@@ -59,6 +59,7 @@ class Orchestrator:
         batch_size: int = DEFAULT_BATCH,
         warm_specs: list[PipelineSpec] | None = None,
         include_experimental: bool = False,
+        only_methods: set[str] | None = None,
     ):
         self.task = task
         self.train = train
@@ -77,6 +78,13 @@ class Orchestrator:
             for m in find(ModuleKind.METHOD, task.family, Modality(task.modality),
                           include_experimental=include_experimental)
         }
+        if only_methods is not None:  # --methods filter: restrict the search
+            unknown = only_methods - set(self.methods)
+            if unknown:
+                raise SystemExit(
+                    f"--methods: unknown {sorted(unknown)} for {task.family.value}; "
+                    f"available: {', '.join(sorted(self.methods))}")
+            self.methods = {n: m for n, m in self.methods.items() if n in only_methods}
         if not self.methods:
             raise RuntimeError(f"no method modules for {task.family.value}/{task.modality.value}")
         self.preprocessors: dict[str, Module] = {

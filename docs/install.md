@@ -79,7 +79,7 @@ is updated, `config/atom.env` is preserved.
 ## Self-test
 
 Every install ends with an automatic self-test: `atom modules verify`
-(18 module smoke gate) plus a pack → inspect round-trip. If the installer
+(28 module smoke gate) plus a pack → inspect round-trip. If the installer
 prints "self-test passed", the installation works.
 
 ## Notes

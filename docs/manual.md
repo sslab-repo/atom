@@ -61,7 +61,7 @@ Verify:
 
 ```bash
 atom --help
-atom modules verify     # expect "18/18 modules pass the smoke gate"
+atom modules verify     # expect "28/28 modules pass the smoke gate"
 ```
 
 ### 1.3 Platform notes
@@ -224,6 +224,7 @@ atom run <pkg> [--target COL] [--task FAMILY] [--time-budget S]
 | `--seed N` | 0 | RNG seed — runs are deterministic |
 | `--yes`, `-y` | off | skip the interactive confirm gate (non-interactive/CI) |
 | `--include-experimental` | off | let unpromoted modules join the search |
+| `--methods A,B,C` | all | restrict the search to these methods (comma-separated); unknown names error with the available list |
 
 **The confirm gate.** Before spending budget, ATOM prints the inferred task
 (family, target, metric, class count, and any advisories like class imbalance,
@@ -266,7 +267,7 @@ accurate. `atom modules list` prints the live set; the stable built-ins are:
 
 | Task family | Methods searched |
 |---|---|
-| classification | logistic-regression, decision-tree, random-forest, hist-gradient-boosting, **neural-net-mlp** (feed-forward neural network) |
+| classification | logistic-regression, sgd-classifier, perceptron, linear/quadratic-discriminant-analysis, gaussian-naive-bayes, k-nearest-neighbors, support-vector-machine, decision-tree, random-forest, extra-trees, adaboost, gradient-boosting, hist-gradient-boosting, **neural-net-mlp** (feed-forward neural network) |
 | regression | ridge, random-forest-reg, hist-gradient-boosting-reg |
 | clustering | kmeans, gaussian-mixture |
 | anomaly-detection | isolation-forest, lof-novelty |
@@ -275,9 +276,17 @@ accurate. `atom modules list` prints the live set; the stable built-ins are:
 `neural-net-mlp` is the deep-learning classifier for **tabular** data — it
 competes head-to-head with the others and wins only when it's genuinely more
 accurate. (CNNs apply to image/spatial data, not tabular columns; GANs are
-generative models, not classifiers — neither is a tabular classifier.)
-`xgboost`/`lightgbm` register automatically if installed (`pip install
-'atom-ai[boosted]'`).
+generative models, not classifiers; LSTMs are for ordered sequences, not i.i.d.
+tabular rows — none is a tabular classifier.)
+`xgboost`/`lightgbm` register automatically if installed
+(`pip install 'atom-ai[boosted]'`).
+
+Restrict the search to specific methods with `atom run --methods A,B,C` — useful
+to compare a shortlist or avoid diluting the budget across all 15 classifiers:
+
+```bash
+atom run mydata --methods neural-net-mlp,support-vector-machine,random-forest --yes
+```
 
 ---
 
@@ -489,7 +498,7 @@ fractions must be > 0. Confirm what was written with `atom inspect <pkg>`.
 | `AMP: deployable=False` | model couldn't be faithfully exported to ONNX; use `native/model.pkl` |
 | kagglehub `ImportError` on `fetch` | `pip install 'atom-ai[kaggle]'` |
 
-Health check any install: `atom modules verify` (expect `18/18 ... pass`).
+Health check any install: `atom modules verify` (expect `28/28 ... pass`).
 
 ---
 
@@ -501,6 +510,7 @@ atom fetch kaggle:<owner/ds> --target COL       Kaggle -> ADP   (needs [kaggle])
 atom pack-images <folder>                       image folder -> ADP
 atom inspect <pkg> [--json]                     profile a dataset
 atom run <pkg> --time-budget S --yes            train -> ONNX model package
+atom run <pkg> --methods A,B --yes              restrict search to methods A,B
 atom modules list | verify                      registry / health check
 
 deploy: runs/<name>-<ts>/model/pipeline.onnx    (signature in manifest.json)

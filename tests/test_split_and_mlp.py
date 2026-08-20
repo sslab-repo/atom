@@ -58,3 +58,42 @@ def test_mlp_registered_and_exports_onnx():
                   config={"hidden_layer_sizes": "32", "_seed": 0})).artifacts
     out = mlp.run(RunContext(Operation.SCORE, {"X": X}, artifacts=art)).outputs
     assert "proba" in out and len(out["pred"]) == 120
+
+
+def test_expanded_classifier_set_registered():
+    from atom.contract import Modality, ModuleKind, TaskFamily
+    from atom.registries import find
+    from atom.registries.builtins import load_builtins
+    load_builtins()
+    names = {m.declares().name for m in
+             find(ModuleKind.METHOD, TaskFamily.CLASSIFICATION, Modality.TABULAR)}
+    expected = {"logistic-regression", "decision-tree", "random-forest",
+                "hist-gradient-boosting", "neural-net-mlp", "k-nearest-neighbors",
+                "support-vector-machine", "gaussian-naive-bayes", "extra-trees",
+                "gradient-boosting", "adaboost", "sgd-classifier",
+                "linear-discriminant-analysis", "quadratic-discriminant-analysis",
+                "perceptron"}
+    assert expected <= names
+
+
+def test_methods_filter_restricts_and_rejects_unknown(tmp_path):
+    import csv
+    from atom.core.run import run_package
+    csvp = tmp_path / "d.csv"
+    rng = __import__("random").Random(0)
+    with csvp.open("w", newline="") as f:
+        w = csv.writer(f)
+        w.writerow(["a", "b", "y"])
+        for _ in range(400):
+            k = rng.random() < 0.5
+            w.writerow([rng.gauss(2 if k else 0, 1), rng.gauss(0, 1), "P" if k else "N"])
+    from atom.data import pack_csv
+    pkg = pack_csv(csvp, tmp_path, name="d", target="y")
+
+    out = run_package(str(pkg), wall_clock_s=8, out_root=str(tmp_path / "r1"),
+                      kb_root=str(tmp_path / "kb"), only_methods={"gaussian-naive-bayes"})
+    assert out.n_trials > 0   # ran with just the one method
+
+    with pytest.raises(SystemExit, match="unknown"):
+        run_package(str(pkg), wall_clock_s=5, out_root=str(tmp_path / "r2"),
+                    kb_root=str(tmp_path / "kb"), only_methods={"nope"})

@@ -49,6 +49,7 @@ def run_package(
     kb_root: str | None = None,  # default: $ATOM_HOME/metakb or ~/.atom/metakb
     force_task: str | None = None,  # task-family override (confirm gate)
     include_experimental: bool = False,
+    only_methods: set[str] | None = None,  # --methods: restrict the search
     seed: int = 0,
     confirm: Callable[[TaskSpec, Fingerprint], bool] = lambda spec, fp: True,
     progress: Callable[[str], None] = lambda s: None,
@@ -148,7 +149,7 @@ def run_package(
             task.notes.append(f"small-data: {cv_folds}-fold CV used for trial scoring")
         evaluator = Evaluator(task, val, cv_folds=cv_folds)
         orch = Orchestrator(task, train, evaluator, budget, seed=seed, warm_specs=warm_specs,
-                    include_experimental=include_experimental)
+                    include_experimental=include_experimental, only_methods=only_methods)
         progress(f"searching: {len(orch.methods)} methods × preprocessing, "
                  f"budget {wall_clock_s:.0f}s" + (f" / {max_trials} trials" if max_trials else ""))
         orch.run(progress=progress)

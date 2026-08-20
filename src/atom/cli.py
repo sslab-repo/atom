@@ -74,6 +74,8 @@ def _cmd_run(args: argparse.Namespace) -> int:
         kb_root=args.kb,
         force_task=args.task,
         include_experimental=args.include_experimental,
+        only_methods=({m.strip() for m in args.methods.split(",") if m.strip()}
+                      if args.methods else None),
         seed=args.seed,
         confirm=lambda task, fp: _confirm_gate(task, fp, args.yes),
         progress=lambda s: print(f"  {s}"),
@@ -269,6 +271,9 @@ def main(argv: list[str] | None = None) -> int:
                        help="override the inferred task family")
     p_run.add_argument("--include-experimental", action="store_true",
                        help="let experimental (unpromoted) modules join the search")
+    p_run.add_argument("--methods", metavar="A,B,C",
+                       help="restrict the search to these methods (comma-separated), "
+                            "e.g. neural-net-mlp,random-forest,xgboost")
     p_run.add_argument("--seed", type=int, default=0)
     p_run.add_argument("--yes", "-y", action="store_true", help="skip the confirm gate")
     p_run.set_defaults(func=_cmd_run)

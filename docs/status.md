@@ -1,6 +1,6 @@
 # ATOM — Initial Development Status
 
-Updated: 2026-08-20 · Suite: 78 tests green · `atom modules verify`: 18/18
+Updated: 2026-08-20 · Suite: 80 tests green · `atom modules verify`: 28/28
 · Reference dataset (CIC-IDS-2017, 623 MB zip) exercised at every milestone.
 · Validation: 30 Kaggle datasets across rounds 3–7; bugfix workflow iter-5
   converged at 2 iterations (docs/qa/bugfix-iter5-report.md); iter-6 unified
@@ -39,7 +39,9 @@ atom modules list|verify            # registry + contract smoke gate
 
 Families runnable: classification, regression (tabular), clustering
 (silhouette-driven), anomaly-detection (outlier/novelty, descriptive).
-Modules: 18 stable built-ins (incl. a neural-net-mlp tabular classifier);
+Modules: 28 stable built-ins (15 classifiers incl. neural-net-mlp, SVM, KNN,
+naive-bayes, LDA/QDA, extra-trees, ada/gradient boosting; + regression,
+clustering, anomaly, dim-reduction, preprocessing);
 external drop-ins via `atom.modules` entry
 points enter as experimental (`--include-experimental` to search them).
 
