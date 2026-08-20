@@ -61,7 +61,7 @@ Verify:
 
 ```bash
 atom --help
-atom modules verify     # expect "17/17 modules pass the smoke gate"
+atom modules verify     # expect "18/18 modules pass the smoke gate"
 ```
 
 ### 1.3 Platform notes
@@ -259,6 +259,26 @@ atom modules verify    # contract smoke-test each module (returns non-zero on an
 
 `verify` is the health check — use it after install/upgrade and in CI.
 
+### 3.7 Algorithms searched
+
+`atom run` searches every applicable method for the task and picks the most
+accurate. `atom modules list` prints the live set; the stable built-ins are:
+
+| Task family | Methods searched |
+|---|---|
+| classification | logistic-regression, decision-tree, random-forest, hist-gradient-boosting, **neural-net-mlp** (feed-forward neural network) |
+| regression | ridge, random-forest-reg, hist-gradient-boosting-reg |
+| clustering | kmeans, gaussian-mixture |
+| anomaly-detection | isolation-forest, lof-novelty |
+| dimension-reduction | pca |
+
+`neural-net-mlp` is the deep-learning classifier for **tabular** data — it
+competes head-to-head with the others and wins only when it's genuinely more
+accurate. (CNNs apply to image/spatial data, not tabular columns; GANs are
+generative models, not classifiers — neither is a tabular classifier.)
+`xgboost`/`lightgbm` register automatically if installed (`pip install
+'atom-ai[boosted]'`).
+
 ---
 
 ## 4. Run outputs (the model package)
@@ -390,6 +410,70 @@ shape, and every trial, so any result is auditable.
   models it found. The budget governs **search**; final full-fidelity refits and
   export happen after and may add time.
 
+### 7.6 Classification: find & compare the most accurate method
+
+```bash
+atom pack data.csv --target species --name mydata
+atom run mydata --time-budget 300 --yes
+```
+
+ATOM optimizes macro-F1 for multiclass (ROC-AUC for binary) and reports accuracy
+too. See which method won and rank the finalists:
+
+```bash
+python3 -c "
+import json, glob
+m = json.load(open(sorted(glob.glob('runs/mydata-*/metrics.json'))[-1]))
+print('selected:', m['final'], '| optimized:', m['primary_metric'])
+print('test:', {k: round(v,4) for k,v in m['test'].items()})
+for c in sorted(m['candidates'], key=lambda c: -c['val_score_oriented']):
+    print(f\"  {c['val_score_oriented']:.4f}  {c['pipeline']['method']['name']}\")
+"
+```
+
+### 7.7 Binary — one class vs. the rest
+
+ATOM treats a 2-value target as binary. Collapse a multiclass label into
+"target vs. rest" first (replace the column so the original can't leak):
+
+```bash
+python3 - <<'PY'
+import csv
+TARGET, POSITIVE = "species", "setosa"          # your column and the class of interest
+rows = list(csv.DictReader(open("data.csv")))
+with open("data_bin.csv", "w", newline="") as f:
+    w = csv.DictWriter(f, fieldnames=list(rows[0])); w.writeheader()
+    for r in rows:
+        r[TARGET] = "positive" if r[TARGET] == POSITIVE else "rest"
+        w.writerow(r)
+PY
+atom pack data_bin.csv --target species --name mydata_bin
+atom run mydata_bin --time-budget 300 --yes      # optimizes ROC-AUC, reports accuracy
+```
+
+### 7.8 Deep-learning (neural-net) classifier
+
+The neural network (`neural-net-mlp`) is searched automatically — no special
+flag. To check whether it beat the classical methods, use the ranking snippet in
+§7.6 and look for `neural-net-mlp`. Give it room to train with a larger budget:
+
+```bash
+atom run mydata --time-budget 600 --yes
+```
+
+(For **image** classification, pack images with `atom pack-images`; CNN/foundation
+models are the deferred M6 adapters — see `docs/status.md`.)
+
+### 7.9 Choosing the train/val/test split
+
+```bash
+atom pack data.csv --target y --split 0.7/0.15/0.15    # custom ratio (normalized)
+atom pack data.csv --target y --split auto              # size-based (see §3.1)
+```
+
+A validation split is always kept (used to select the model), so all three
+fractions must be > 0. Confirm what was written with `atom inspect <pkg>`.
+
 ---
 
 ## 8. Exit codes & troubleshooting
@@ -405,14 +489,14 @@ shape, and every trial, so any result is auditable.
 | `AMP: deployable=False` | model couldn't be faithfully exported to ONNX; use `native/model.pkl` |
 | kagglehub `ImportError` on `fetch` | `pip install 'atom-ai[kaggle]'` |
 
-Health check any install: `atom modules verify` (expect `17/17 ... pass`).
+Health check any install: `atom modules verify` (expect `18/18 ... pass`).
 
 ---
 
 ## 9. Quick reference card
 
 ```
-atom pack <csv> --target COL --out DIR         CSV  -> ADP
+atom pack <csv> --target COL [--split R] -o DIR CSV  -> ADP   (R=0.7/0.15/0.15 | auto)
 atom fetch kaggle:<owner/ds> --target COL       Kaggle -> ADP   (needs [kaggle])
 atom pack-images <folder>                       image folder -> ADP
 atom inspect <pkg> [--json]                     profile a dataset
