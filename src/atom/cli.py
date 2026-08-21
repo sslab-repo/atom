@@ -197,6 +197,15 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
 
 
 def _cmd_pack(args: argparse.Namespace) -> int:
+    if args.type == "timeseries":
+        from atom.data import pack_timeseries_csv
+        try:
+            root = pack_timeseries_csv(args.csv, args.out, name=args.name, target=args.target,
+                                       time_col=args.time, group_col=args.group, split=args.split)
+        except ValueError as exc:
+            raise SystemExit(str(exc)) from exc
+        print(f"wrote ADP: {root}  (type: timeseries -> per-sequence features)")
+        return 0
     root = _pack_csv_with_help(args.csv, args.out, name=args.name, target=args.target,
                                split=args.split, modality=args.type)
     print(f"wrote ADP: {root}  (type: {args.type})")
@@ -294,6 +303,8 @@ def main(argv: list[str] | None = None) -> int:
                              "default 0.8/0.1/0.1")
     p_pack.add_argument("--type", choices=["tabular", "text", "timeseries"], default="tabular",
                         help="declared input type (ADR-0008); routes methods at run time")
+    p_pack.add_argument("--time", help="time column (required for --type timeseries)")
+    p_pack.add_argument("--group", help="sequence/entity id column (required for --type timeseries)")
     p_pack.set_defaults(func=_cmd_pack)
 
     p_fetch = sub.add_parser("fetch", help="fetch kaggle:<slug> and convert to an ADP")

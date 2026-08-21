@@ -55,3 +55,43 @@ def test_pack_rejects_bad_modality(tmp_path):
     csvp.write_text("a,y\n1,0\n2,1\n")
     with pytest.raises(ValueError, match="--type"):
         pack_csv(csvp, tmp_path, name="d", target="y", modality="image")
+
+
+def test_timeseries_feature_extraction(tmp_path):
+    """Phase 2 (torch-free): a time-series CSV packs into a tabular ADP of
+    per-sequence summary features, one row per group, split per-sequence."""
+    import csv as _csv
+    import random
+    from atom.data import DatasetPackage, pack_timeseries_csv
+
+    rng = random.Random(0)
+    csvp = tmp_path / "ts.csv"
+    with csvp.open("w", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(["entity", "t", "s1", "s2", "label"])
+        for e in range(120):
+            rising = rng.random() < 0.5
+            for t in range(15):
+                w.writerow([f"e{e}", t, round((t * 0.4 if rising else rng.gauss(0, 1)), 3),
+                            round(rng.gauss(5, 1), 3), "up" if rising else "flat"])
+    root = pack_timeseries_csv(csvp, tmp_path, name="ts", target="label",
+                               time_col="t", group_col="entity")
+    with DatasetPackage.open(root) as pkg:
+        m = pkg.manifest
+        # one row per sequence (120 groups), not per raw row (1800)
+        assert sum(m.counts[s] for s in ("train", "val", "test")) == 120
+        # 2 numeric channels x 6 summary stats = 12 feature columns (+ id + target)
+        feat = [c.name for c in m.columns if c.name.endswith(
+            ("__mean", "__std", "__min", "__max", "__last", "__slope"))]
+        assert len(feat) == 12 and "s1__slope" in feat
+        assert m.modality == "tabular"          # runnable by the tabular classifiers
+        assert m.dataset_source["modality"] == "timeseries"  # provenance preserved
+
+
+def test_timeseries_requires_time_and_group(tmp_path):
+    from atom.data import pack_timeseries_csv
+    csvp = tmp_path / "x.csv"
+    csvp.write_text("g,t,v,y\na,1,2,up\na,2,3,up\n")
+    import pytest as _pytest
+    with _pytest.raises(ValueError, match="needs --time"):
+        pack_timeseries_csv(csvp, tmp_path, name="x", target="y", time_col=None, group_col="g")

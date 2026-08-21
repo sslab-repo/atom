@@ -58,6 +58,7 @@ class Manifest:
     files: tuple[FileEntry, ...]
     checksums: dict[str, str]  # member path -> "sha256:<hex>"
     content_id: str  # sha256 of the manifest bytes
+    dataset_source: dict[str, Any] = field(default_factory=dict)  # e.g. timeseries origin
     dms_dataset_id: int | None = None
     raw: dict[str, Any] = field(default_factory=dict, repr=False)
 
@@ -110,6 +111,7 @@ def parse_manifest(data: bytes) -> Manifest:
         files=files,
         checksums=dict(doc.get("checksums", {})),
         content_id="sha256:" + hashlib.sha256(data).hexdigest(),
+        dataset_source=dict(ds.get("source", {}) or {}),
         dms_dataset_id=ds.get("dms_dataset_id"),
         raw=doc,
     )

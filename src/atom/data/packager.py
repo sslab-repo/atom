@@ -126,13 +126,16 @@ def pack_csv(
     id_column: str = "sample_id",
     split: str | None = None,
     modality: str = "tabular",
+    source: dict | None = None,
 ) -> Path:
     """Build an ADP folder from one CSV. Returns the package root path.
 
     split: train/val/test ratios — None (default 80/10/10), 'auto' (size-based),
     or 'TRAIN/VAL/TEST' e.g. '0.7/0.15/0.15'.
     modality: declared input type (ADR-0008) — 'tabular' (default), 'text', or
-    'timeseries'. Recorded in the manifest; drives which methods a run uses."""
+    'timeseries'. Recorded in the manifest; drives which methods a run uses.
+    source: optional provenance dict recorded under dataset.source (e.g. how a
+    timeseries CSV was feature-extracted into this tabular package)."""
     if modality not in TABULAR_MODALITIES:
         raise ValueError(
             f"--type must be one of {', '.join(TABULAR_MODALITIES)} for a CSV "
@@ -220,6 +223,7 @@ def pack_csv(
         "dataset": {
             "name": name,
             "modality": modality,
+            **({"source": source} if source else {}),
             "dataset_type": "supervised" if target else "unlabeled",
         },
         "counts": {"files": 1, "samples": split_doc["counts"]},
@@ -259,3 +263,102 @@ def pack_csv(
         f"`{csv_path.name}`. See manifest.json for schema, roles, and checksums.\n"
     )
     return root
+
+
+_TS_STATS = ("mean", "std", "min", "max", "last", "slope")
+
+
+def _summarize(values: list[float]) -> list[float]:
+    """Per-sequence summary stats over one ordered numeric channel."""
+    import math
+
+    vals = [v for v in values if v is not None and math.isfinite(v)]
+    if not vals:
+        return [float("nan")] * len(_TS_STATS)
+    n = len(vals)
+    mean = sum(vals) / n
+    std = (sum((v - mean) ** 2 for v in vals) / n) ** 0.5 if n > 1 else 0.0
+    if n > 1:  # linear-trend slope over the ordered index
+        mx = (n - 1) / 2
+        den = sum((i - mx) ** 2 for i in range(n))
+        slope = sum((i - mx) * (v - mean) for i, v in enumerate(vals)) / den if den else 0.0
+    else:
+        slope = 0.0
+    return [mean, std, min(vals), max(vals), vals[-1], slope]
+
+
+def pack_timeseries_csv(
+    csv_path: str | Path,
+    out_dir: str | Path,
+    name: str | None = None,
+    target: str | None = None,
+    time_col: str | None = None,
+    group_col: str | None = None,
+    split: str | None = None,
+) -> Path:
+    """Time-series CSV -> tabular ADP by per-sequence feature extraction (ADR-0008
+    Phase 2, torch-free). Rows are grouped by `group_col` (one sequence per
+    group), ordered by `time_col`, and each numeric feature channel is summarized
+    (mean/std/min/max/last/slope). The result is a tabular package (one row per
+    sequence) the existing classifiers run on — on any machine, no PyTorch. The
+    split is per-sequence, so no group leaks across train/val/test."""
+    from collections import OrderedDict
+
+    from atom.core.ingest.profiler import parse_numeric
+
+    csv_path = Path(csv_path)
+    name = name or csv_path.stem
+    if not (time_col and group_col and target):
+        raise ValueError("--type timeseries needs --time, --group and --target")
+
+    with open_text_tolerant(csv_path) as fh:
+        reader = csv.reader(fh)
+        header = _dedupe(next(reader))
+        for col in (time_col, group_col, target):
+            if col not in header:
+                raise ValueError(f"column {col!r} not in CSV header")
+        idx = {c: i for i, c in enumerate(header)}
+        rows = [rec for rec in reader]
+
+    feat_cols = [c for c in header if c not in (time_col, group_col, target)]
+    probe = rows[:500] or rows
+    numeric_feats = [
+        c for c in feat_cols
+        if probe and sum(parse_numeric(r[idx[c]] if idx[c] < len(r) else "") is not None
+                         for r in probe) >= 0.8 * len(probe)
+    ]
+    if not numeric_feats:
+        raise ValueError("no numeric feature columns to summarize for the time series")
+
+    groups: "OrderedDict[str, list]" = OrderedDict()
+    for r in rows:
+        groups.setdefault(r[idx[group_col]] if idx[group_col] < len(r) else "", []).append(r)
+
+    def _tkey(rec):
+        v = parse_numeric(rec[idx[time_col]] if idx[time_col] < len(rec) else "")
+        return (0, v) if v is not None else (1, rec[idx[time_col]] if idx[time_col] < len(rec) else "")
+
+    out_header = [f"{c}__{s}" for c in numeric_feats for s in _TS_STATS] + [target]
+    out_rows = []
+    for grp in groups.values():
+        grp_sorted = sorted(grp, key=_tkey)
+        row: list = []
+        for c in numeric_feats:
+            vals = [parse_numeric(r[idx[c]] if idx[c] < len(r) else "") for r in grp_sorted]
+            row += _summarize(vals)
+        row.append(grp_sorted[-1][idx[target]] if idx[target] < len(grp_sorted[-1]) else "")
+        out_rows.append(row)
+
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as td:
+        feat_csv = Path(td) / f"{name}_tsfeat.csv"
+        with feat_csv.open("w", newline="") as fh:
+            w = csv.writer(fh)
+            w.writerow(out_header)
+            w.writerows(out_rows)
+        return pack_csv(
+            feat_csv, out_dir, name=name, target=target, split=split, modality="tabular",
+            source={"modality": "timeseries", "time": time_col, "group": group_col,
+                    "aggregation": "summary-stats", "stats": list(_TS_STATS),
+                    "n_sequences": len(out_rows)})

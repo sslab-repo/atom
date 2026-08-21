@@ -114,6 +114,18 @@ atom pack <csv> [--target COL] [--name NAME] [--out DIR]
 | `--out DIR`, `-o` | `.` | output directory |
 | `--split TRAIN/VAL/TEST` | `0.8/0.1/0.1` | split ratios, e.g. `0.7/0.15/0.15` (normalized); or `auto` (size-based) |
 | `--type` | `tabular` | declared input type: `tabular`, `text`, or `timeseries` (ADR-0008; images use `pack-images`). Routes methods at run time |
+| `--time COL` / `--group COL` | — | required with `--type timeseries`: the time (ordering) and sequence-id (grouping) columns |
+
+**Time-series (`--type timeseries`)** groups rows by `--group` (one sequence per
+entity), orders by `--time`, and extracts per-sequence summary features
+(mean/std/min/max/last/slope per numeric channel) into a tabular package the
+classifiers run on — **torch-free, on any machine**. The split is per-sequence
+(no entity leaks across train/test).
+
+```bash
+atom pack sensors.csv --target status --type timeseries --time ts --group machine_id
+atom run sensors --time-budget 120 --yes
+```
 
 `--split` controls the train / validation / test partition (a deterministic
 hash split). A **validation** split is always kept — ATOM selects the model on
