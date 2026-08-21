@@ -119,7 +119,9 @@ atom run machines_raw --methods conv1d-classifier,lstm-classifier --time-budget 
 ```
 
 The log prints `device: mps (torch 2.13.0)` and `raw sequences: 2 channels x 24 steps` —
-the nets train on the Apple GPU. Force CPU instead:
+the nets train on the Apple GPU and export to a **self-contained ONNX graph**
+(`deployable=True`): NaN-fill + standardize + reshape are baked into the graph, so it
+serves raw features on CPU onnxruntime on a no-torch machine. Force CPU training instead:
 
 ```bash
 ATOM_DEVICE=cpu atom run machines_raw --methods conv1d-classifier --time-budget 60 --yes --out runs
@@ -131,7 +133,8 @@ ATOM_DEVICE=cpu atom run machines_raw --methods conv1d-classifier --time-budget 
   `model/pipeline.onnx` (deployable model + `manifest.json`), `provenance/`.
 - `machines.csv` has a strong trend, so you'll see a **"suspiciously-perfect"**
   warning — that's the leak screen working; the models score near-perfectly on it.
-- The deep sequence models currently save the native model (`deployable=False`);
-  they run/predict fine — ONNX export for the torch tier is the next feature.
+- The deep sequence models export to ONNX (`deployable=True`) and pass the parity
+  gate, so `model/pipeline.onnx` serves them on CPU onnxruntime anywhere — train on
+  the GPU, deploy on a no-torch machine.
 - Without the alias, `atom` from `scripts/install.sh` is **torch-free** (classical
   tier only). Use the alias above for the conv1d/lstm deep models.

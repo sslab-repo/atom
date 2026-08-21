@@ -69,6 +69,9 @@ try:  # pragma: no cover - depends on environment
             self.head = nn.Linear(head_in, n_classes)
 
         def forward(self, x):
+            # complete, self-contained graph: NaN-fill + standardize + reshape are
+            # all IN the graph, so the exported ONNX takes RAW features.
+            x = torch.nan_to_num(x)
             x = (x - self.mean) / self.std
             x = x.reshape(-1, self.C, self.L)
             return torch.softmax(self.head(self.body(x)), dim=1)
@@ -77,6 +80,7 @@ try:  # pragma: no cover - depends on environment
         NAME: str
         CATEGORY: str
         FAMILY = TaskFamily.CLASSIFICATION
+        SELF_PREPROCESSING = True  # net does NaN-fill + standardize; skip sklearn chain
 
         def declares(self) -> Declaration:
             return Declaration(
@@ -138,15 +142,15 @@ try:  # pragma: no cover - depends on environment
                     lossf(torch.log(net(xt[idx]) + 1e-9), yt[idx]).backward()
                     opt.step()
             net.eval()
-            return RunResult(artifacts={"net": net, "classes": classes, "device": dev})
+            net = net.to("cpu")  # inference + ONNX export on CPU (train used the GPU)
+            return RunResult(artifacts={"net": net, "classes": classes, "n_features": X.shape[1]})
 
         def _score(self, ctx: RunContext) -> RunResult:
             net = ctx.artifacts["net"]
             classes = ctx.artifacts["classes"]
-            dev = ctx.artifacts["device"]
-            X = np.nan_to_num(np.asarray(ctx.data["X"], dtype=np.float32), copy=False)
+            X = np.asarray(ctx.data["X"], dtype=np.float32)  # net NaN-fills internally
             with torch.no_grad():
-                proba = net(torch.tensor(X, device=dev)).cpu().numpy()
+                proba = net(torch.tensor(X)).numpy()
             pred = np.array([classes[i] for i in proba.argmax(axis=1)], dtype=object)
             return RunResult(outputs={"pred": pred, "proba": proba, "classes": classes})
 

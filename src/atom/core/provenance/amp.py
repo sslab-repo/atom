@@ -241,6 +241,64 @@ def _parity(onnx_bytes: bytes, pipeline, X: np.ndarray, is_classifier: bool,
     return report
 
 
+def _torch_net(candidate):
+    """The torch nn.Module of a self-preprocessing deep pipeline, or None."""
+    net = getattr(candidate, "method_artifacts", {}).get("net")
+    if net is None:
+        return None
+    try:
+        import torch.nn as nn
+    except ImportError:
+        return None
+    return net if isinstance(net, nn.Module) else None
+
+
+def _export_torch(net, n_features: int) -> bytes:
+    """Export a self-contained deep net (raw features -> proba) to ONNX via the
+    legacy exporter (the dynamo path needs onnxscript)."""
+    import io
+
+    import torch
+
+    net.eval()
+    dummy = torch.zeros(1, n_features, dtype=torch.float32)
+    buf = io.BytesIO()
+    torch.onnx.export(net, dummy, buf, input_names=["X"], output_names=["probabilities"],
+                      dynamic_axes={"X": {0: "n"}, "probabilities": {0: "n"}},
+                      opset_version=17, dynamo=False)
+    return buf.getvalue()
+
+
+def _parity_torch(onnx_bytes, fitted, X, classes, agreement_min, sample_y) -> dict:
+    """Native (torch) vs ONNX for a deep classifier: the graph outputs proba,
+    labels are argmax(proba) mapped through `classes`."""
+    import onnxruntime as ort
+
+    sess = ort.InferenceSession(onnx_bytes, providers=["CPUExecutionProvider"])
+    onnx_proba = np.asarray(sess.run(None, {"X": X.astype(np.float32)})[0])
+    onnx_pred = np.array([classes[i] for i in onnx_proba.argmax(axis=1)]).astype(str)
+    native = fitted.predict(X.astype(np.float64))
+    native_pred = np.asarray(native["pred"]).astype(str)
+    agreement = float(np.mean(native_pred == onnx_pred))
+    report = {"label_agreement": agreement}
+    if native.get("proba") is not None:
+        diff = np.abs(np.asarray(native["proba"]) - onnx_proba).max(axis=1)
+        report["proba_match_fraction"] = float(np.mean(diff <= PROBA_ATOL))
+        report["proba_max_diff"] = float(diff.max())
+    floor = agreement_min if agreement_min is not None else 0.98
+    if sample_y is not None:
+        from sklearn.metrics import f1_score
+
+        yy = np.asarray(sample_y).astype(str)
+        d = abs(f1_score(yy, native_pred, average="macro")
+                - f1_score(yy, onnx_pred, average="macro"))
+        report["metric_delta_f1_macro"] = float(d)
+        report["pass"] = agreement >= floor and d <= METRIC_DELTA_MAX
+    else:
+        report["pass"] = agreement >= floor
+    return report
+
+
 def export_amp(
     run_dir: Path,
     task: dict[str, Any],
@@ -261,6 +319,7 @@ def export_amp(
     member_ids = sorted(set(ensemble_members)) if ensemble_members else [0]
 
     graphs, parities, deployable = [], [], True
+    torch_export = False  # deep graphs output probabilities only (label = argmax)
     for idx in member_ids:
         name = "pipeline.onnx" if len(member_ids) == 1 else f"member_{idx}.onnx"
         if should_stop is not None and graphs and should_stop():
@@ -270,6 +329,25 @@ def export_amp(
             parities.append({"graph": name, "pass": False, "skipped": "budget"})
             continue
         try:
+            net = _torch_net(candidates[idx])
+            if net is not None:  # deep tier: torch -> ONNX (self-contained graph)
+                if len(member_ids) > 1:  # deep model inside an ensemble: not yet fused
+                    deployable = False
+                    parities.append({"graph": name, "pass": False,
+                                     "skipped": "torch-in-ensemble"})
+                    continue
+                onnx_bytes = _export_torch(net, len(features))
+                parity = _parity_torch(onnx_bytes, candidates[idx], sample_X, classes,
+                                       agreement_min, sample_y)
+                parity["graph_repair"] = "torch-onnx"
+                torch_export = True
+                parities.append({"graph": name, **parity})
+                if not parity["pass"]:
+                    deployable = False
+                (model_dir / name).write_bytes(onnx_bytes)
+                graphs.append({"file": f"model/{name}", "member": idx,
+                               "sha256": "sha256:" + hashlib.sha256(onnx_bytes).hexdigest()})
+                continue
             pipeline = _sklearn_pipeline(candidates[idx])
             onnx_bytes = _convert(pipeline, len(features))
             onnx_bytes, thr_fixed = _fix_histgb_thresholds(onnx_bytes, pipeline.steps[-1][1])
@@ -302,7 +380,8 @@ def export_amp(
         "signature": {
             "input": {"name": "X", "dtype": "float32", "shape": [None, len(features)],
                       "features": features},
-            "outputs": (["label", "probabilities"] if is_classifier else ["prediction"]),
+            "outputs": (["probabilities"] if torch_export
+                        else ["label", "probabilities"] if is_classifier else ["prediction"]),
             "label_map": classes,
         },
         "combination": (

@@ -101,15 +101,20 @@ def fit_pipeline(
         X, y = train.X, train.y
 
     fitted = FittedPipeline(spec=spec)
-    for stage in spec.preprocessing:
-        module = modules[stage["name"]]
-        result = module.run(RunContext(Operation.FIT, {"X": X}, config=dict(stage["config"])))
-        fitted.pre_stages.append((module, result.artifacts))
-        X = module.run(
-            RunContext(Operation.TRANSFORM, {"X": X}, artifacts=result.artifacts)
-        ).outputs["X"]
-
     method = modules[spec.method["name"]]
+    # Self-preprocessing methods (deep torch nets) fill NaN + standardize inside
+    # their own graph, so skip the sklearn impute/scale chain — this keeps the
+    # exported ONNX graph complete (raw features -> proba) and deployable.
+    self_prep = getattr(method, "SELF_PREPROCESSING", False)
+    if not self_prep:
+        for stage in spec.preprocessing:
+            module = modules[stage["name"]]
+            result = module.run(RunContext(Operation.FIT, {"X": X}, config=dict(stage["config"])))
+            fitted.pre_stages.append((module, result.artifacts))
+            X = module.run(
+                RunContext(Operation.TRANSFORM, {"X": X}, artifacts=result.artifacts)
+            ).outputs["X"]
+
     config = dict(spec.method["config"])
     config["_seed"] = seed
     fit_data = {"X": X, "y": y}

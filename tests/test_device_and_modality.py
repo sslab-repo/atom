@@ -147,3 +147,51 @@ def test_conv1d_lstm_train_predict_when_torch():
                     config={"epochs": 5, "_seed": 0})).artifacts
         out = m.run(RunContext(Operation.SCORE, {"X": X}, artifacts=art)).outputs
         assert out["proba"].shape == (60, 2) and len(out["pred"]) == 60
+
+
+def test_deep_tier_exports_onnx_and_is_deployable(tmp_path):
+    """Phase 2b: a raw-sequence conv1d run exports a self-contained torch->ONNX
+    graph that passes the parity gate (deployable=True) and serves on CPU
+    onnxruntime — i.e. it deploys on a no-torch machine. Skipped without torch."""
+    if not device.torch_available():
+        import pytest as _pytest
+        _pytest.skip("torch not installed (CPU-only machine)")
+    import csv as _csv
+    import json
+    import random
+    from pathlib import Path
+
+    import numpy as np
+    from atom.core.run import run_package
+    from atom.data import pack_timeseries_csv
+
+    rng = random.Random(5)
+    csvp = tmp_path / "ts.csv"
+    with csvp.open("w", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(["e", "t", "s1", "s2", "y"])
+        for e in range(240):
+            up = rng.random() < 0.5
+            for t in range(16):
+                w.writerow([f"e{e}", t, round((t * 0.2 if up else 0) + rng.gauss(0, 1), 3),
+                            round(rng.gauss(5, 1), 3), "up" if up else "flat"])
+    adp = pack_timeseries_csv(csvp, tmp_path, name="tsr", target="y",
+                              time_col="t", group_col="e", layout="raw")
+    outcome = run_package(str(adp), wall_clock_s=30, max_trials=6, max_rows=2000,
+                          only_methods={"conv1d-classifier"},
+                          out_root=str(tmp_path / "runs"), seed=0)
+    run_dir = Path(outcome.run_dir)
+    manifest = json.loads((run_dir / "manifest.json").read_text())
+    assert manifest["deployable"] is True
+    assert all(p["pass"] for p in manifest["parity"])
+    # torch graph outputs probabilities only (label = argmax via label_map)
+    assert manifest["signature"]["outputs"] == ["probabilities"]
+
+    import onnxruntime as ort
+    graph = run_dir / manifest["graphs"][0]["file"]
+    sess = ort.InferenceSession(str(graph), providers=["CPUExecutionProvider"])
+    d = len(manifest["signature"]["input"]["features"])
+    X = np.random.default_rng(0).normal(size=(8, d)).astype(np.float32)
+    proba = sess.run(None, {"X": X})[0]
+    assert proba.shape == (8, len(manifest["signature"]["label_map"]))
+    assert np.allclose(proba.sum(axis=1), 1.0, atol=1e-4)  # softmax rows

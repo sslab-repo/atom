@@ -4,7 +4,7 @@
 architecture, current state, conventions, environment gotchas, and what's next,
 so any session can pick up without re-deriving. Keep it updated as things land.
 
-Last updated: 2026-08-21 · Active branch: **`dev`** · HEAD: `bffc639`
+Last updated: 2026-08-21 · Active branch: **`dev`** · Phase 2c (torch→ONNX) landed
 
 ---
 
@@ -113,7 +113,7 @@ sequence, split per-sequence (no group leak). Two `--ts-layout`:
   X (n, C*L) → (n, C, L).
 
 ### Testing / quality
-`tests/` (12 files), run `.venv/bin/python -m pytest -q` (currently 90 pass),
+`tests/` (12 files), run `.venv/bin/python -m pytest -q` (currently 91 pass),
 `ruff check src tests`, `atom modules verify` (28 without torch, 30 with).
 CI must pass WITHOUT torch (deep tests skip when torch absent).
 
@@ -122,14 +122,20 @@ CI must pass WITHOUT torch (deep tests skip when torch absent).
 Leading with the torch tier per the user.
 - **Phase 0 — foundation** ✅ (`d9b9f1e`): device.py, `--type`, gates.
 - **Phase 2a — time-series features (torch-free)** ✅ (`8dc43fa`).
-- **Phase 2b — conv1d/lstm on raw sequences (torch)** ✅ (`bffc639`) — trains on
-  mps/cpu. **GAP: deployable=False — torch→ONNX export NOT wired into
-  `amp.py`.**
-- **NEXT: torch→ONNX export** for the deep tier. PROVEN feasible:
-  `torch.onnx.export(dynamo=False)` of a self-standardizing net → onnxruntime,
-  parity 3e-8. Plan: add a torch-export branch in `core/provenance/amp.py`;
-  likely let torch methods self-preprocess (bypass sklearn scale) so the graph
-  is complete raw→proba.
+- **Phase 2b — conv1d/lstm on raw sequences (torch)** ✅ — trains on mps/cpu.
+- **Phase 2c — torch→ONNX export for the deep tier** ✅ **GAP CLOSED**:
+  conv1d/lstm now ship `deployable=True`. `_SeqNet` self-preprocesses (NaN-fill +
+  standardize + reshape all IN the graph), `SELF_PREPROCESSING=True` makes
+  `fit_pipeline` skip the sklearn impute/scale chain, and `core/provenance/amp.py`
+  has a torch branch: `_torch_net` → `_export_torch` (`torch.onnx.export(...,
+  opset_version=17, dynamo=False)`) → `_parity_torch` (onnx proba vs native
+  predict). Single-member only; a torch model inside an ensemble → `deployable=False`
+  (`skipped: torch-in-ensemble`), not yet fused. The torch graph outputs
+  **`probabilities` only** (label = argmax via `label_map`), so the manifest
+  signature `outputs` is `["probabilities"]` for torch AMPs (sklearn stays
+  `["label","probabilities"]`). Regression test:
+  `tests/test_device_and_modality.py::test_deep_tier_exports_onnx_and_is_deployable`
+  (torch-gated; asserts deployable + parity + CPU-onnxruntime serving).
 - **Phase 3 — images (CNN / foundation embeddings, torch).**
 - **Phase 4 — GAN (GANomaly in the anomaly-detection family; binary
   normal-vs-rare, torch).**
