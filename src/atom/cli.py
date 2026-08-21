@@ -190,27 +190,29 @@ def _cmd_fetch(args: argparse.Namespace) -> int:
         csvs = [c for c in csvs if os.path.basename(c) == args.file] or csvs
     name = args.name or slug.replace("/", "-")
     root = _pack_csv_with_help(csvs[0], args.out, name=name, target=args.target,
-                               split=getattr(args, "split", None))
+                               split=getattr(args, "split", None),
+                               modality=getattr(args, "type", "tabular"))
     print(f"fetched {slug} ({os.path.basename(csvs[0])}) -> ADP: {root}")
     return 0
 
 
 def _cmd_pack(args: argparse.Namespace) -> int:
     root = _pack_csv_with_help(args.csv, args.out, name=args.name, target=args.target,
-                               split=args.split)
-    print(f"wrote ADP: {root}")
+                               split=args.split, modality=args.type)
+    print(f"wrote ADP: {root}  (type: {args.type})")
     return 0
 
 
-def _pack_csv_with_help(csv_path, out, name, target, split=None):
+def _pack_csv_with_help(csv_path, out, name, target, split=None, modality="tabular"):
     """pack_csv, but a wrong --target dies with the header + a suggestion
     instead of a traceback (grad-admissions: 'Chance of Admit ' vs no space)."""
     from atom.data import pack_csv
 
     try:
-        return pack_csv(csv_path, out, name=name, target=target, split=split)
+        return pack_csv(csv_path, out, name=name, target=target, split=split,
+                        modality=modality)
     except ValueError as exc:
-        if "--split" in str(exc):  # bad ratio spec: show the message plainly
+        if "--split" in str(exc) or "--type" in str(exc):  # bad flag: show plainly
             raise SystemExit(str(exc)) from exc
         if not (target and "not in CSV header" in str(exc)):
             raise
@@ -290,6 +292,8 @@ def main(argv: list[str] | None = None) -> int:
     p_pack.add_argument("--split", metavar="TRAIN/VAL/TEST",
                         help="split ratios e.g. 0.7/0.15/0.15, or 'auto' (size-based); "
                              "default 0.8/0.1/0.1")
+    p_pack.add_argument("--type", choices=["tabular", "text", "timeseries"], default="tabular",
+                        help="declared input type (ADR-0008); routes methods at run time")
     p_pack.set_defaults(func=_cmd_pack)
 
     p_fetch = sub.add_parser("fetch", help="fetch kaggle:<slug> and convert to an ADP")
@@ -300,6 +304,8 @@ def main(argv: list[str] | None = None) -> int:
     p_fetch.add_argument("--out", "-o", default=".")
     p_fetch.add_argument("--split", metavar="TRAIN/VAL/TEST",
                          help="split ratios e.g. 0.7/0.15/0.15, or 'auto'; default 0.8/0.1/0.1")
+    p_fetch.add_argument("--type", choices=["tabular", "text", "timeseries"], default="tabular",
+                         help="declared input type (ADR-0008); routes methods at run time")
     p_fetch.set_defaults(func=_cmd_fetch)
 
     p_pimg = sub.add_parser("pack-images",

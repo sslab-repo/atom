@@ -115,6 +115,9 @@ def _infer_arrow_type(values: list[str]):
         return pa.string()
 
 
+TABULAR_MODALITIES = ("tabular", "text", "timeseries")
+
+
 def pack_csv(
     csv_path: str | Path,
     out_dir: str | Path,
@@ -122,11 +125,18 @@ def pack_csv(
     target: str | None = None,
     id_column: str = "sample_id",
     split: str | None = None,
+    modality: str = "tabular",
 ) -> Path:
     """Build an ADP folder from one CSV. Returns the package root path.
 
     split: train/val/test ratios — None (default 80/10/10), 'auto' (size-based),
-    or 'TRAIN/VAL/TEST' e.g. '0.7/0.15/0.15'."""
+    or 'TRAIN/VAL/TEST' e.g. '0.7/0.15/0.15'.
+    modality: declared input type (ADR-0008) — 'tabular' (default), 'text', or
+    'timeseries'. Recorded in the manifest; drives which methods a run uses."""
+    if modality not in TABULAR_MODALITIES:
+        raise ValueError(
+            f"--type must be one of {', '.join(TABULAR_MODALITIES)} for a CSV "
+            f"(images use 'atom pack-images'), got {modality!r}")
     import pyarrow as pa
     import pyarrow.parquet as pq
 
@@ -209,7 +219,7 @@ def pack_csv(
         "manifest_version": "atom-dataset-v1",
         "dataset": {
             "name": name,
-            "modality": "tabular",
+            "modality": modality,
             "dataset_type": "supervised" if target else "unlabeled",
         },
         "counts": {"files": 1, "samples": split_doc["counts"]},

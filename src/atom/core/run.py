@@ -77,6 +77,16 @@ def run_package(
                 "ready (pack/inspect work) but method modules for this modality land "
                 "with the foundation adapters — deferred, see docs/status.md."
             )
+        # Declared non-tabular CSV modality (ADR-0008): the handler lands in its
+        # phase; until then say so plainly instead of dropping to a generic error.
+        if fp.modality in ("text", "timeseries"):
+            raise SystemExit(
+                f"modality '{fp.modality}' declared (--type): its methods are not "
+                "installed yet (ADR-0008 phased rollout). Re-pack with --type tabular "
+                "to run it as plain tabular data, or install the deep tier when available."
+            )
+        from atom.core.device import describe as _device_describe
+        progress(_device_describe())  # cpu / cuda / mps (deep tier presence)
 
         if task.family is TaskFamily.ANOMALY_DETECTION:
             return _run_anomaly(pkg, fp, task, wall_clock_s, max_rows, out_root,

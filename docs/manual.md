@@ -113,6 +113,7 @@ atom pack <csv> [--target COL] [--name NAME] [--out DIR]
 | `--name NAME` | CSV stem | package name |
 | `--out DIR`, `-o` | `.` | output directory |
 | `--split TRAIN/VAL/TEST` | `0.8/0.1/0.1` | split ratios, e.g. `0.7/0.15/0.15` (normalized); or `auto` (size-based) |
+| `--type` | `tabular` | declared input type: `tabular`, `text`, or `timeseries` (ADR-0008; images use `pack-images`). Routes methods at run time |
 
 `--split` controls the train / validation / test partition (a deterministic
 hash split). A **validation** split is always kept — ATOM selects the model on
