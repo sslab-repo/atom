@@ -98,6 +98,13 @@ def run_package(
         train = load_matrix(pkg, fp, "train", task.target, max_rows=max_rows, seed=seed)
         val = load_matrix(pkg, fp, "val", task.target, max_rows=max(max_rows // 2, 10_000),
                           seed=seed + 1)
+        # raw-sequence packages carry a (channels, length) shape so the deep
+        # sequence models (conv1d/lstm) can reshape the flat feature matrix.
+        _src = pkg.manifest.dataset_source
+        if _src.get("layout") == "raw" and _src.get("n_channels") and _src.get("seq_len"):
+            shape = (int(_src["n_channels"]), int(_src["seq_len"]))
+            train.seq_shape = val.seq_shape = shape
+            progress(f"raw sequences: {shape[0]} channels x {shape[1]} steps")
         phases["load_s"] = round(budget.elapsed, 1)
         if train.dropped:
             progress(f"dropped {len(train.dropped)} non-feature columns "

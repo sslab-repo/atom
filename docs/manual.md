@@ -117,14 +117,23 @@ atom pack <csv> [--target COL] [--name NAME] [--out DIR]
 | `--time COL` / `--group COL` | — | required with `--type timeseries`: the time (ordering) and sequence-id (grouping) columns |
 
 **Time-series (`--type timeseries`)** groups rows by `--group` (one sequence per
-entity), orders by `--time`, and extracts per-sequence summary features
-(mean/std/min/max/last/slope per numeric channel) into a tabular package the
-classifiers run on — **torch-free, on any machine**. The split is per-sequence
-(no entity leaks across train/test).
+entity), orders by `--time`, and packs one row per sequence. Two layouts
+(`--ts-layout`):
+- `features` (default, **torch-free, any machine**): per-sequence summary stats
+  (mean/std/min/max/last/slope per channel) → the 15 classifiers run on them.
+- `raw`: padded sequences (channel-major) so the **deep sequence models**
+  `conv1d-classifier` / `lstm-classifier` (PyTorch tier) can learn temporal
+  patterns; the tabular classifiers also run on them.
+
+The split is per-sequence (no entity leaks). The deep models train on the
+resolved device (cuda/mps/cpu) and are searched only when PyTorch is installed.
 
 ```bash
 atom pack sensors.csv --target status --type timeseries --time ts --group machine_id
-atom run sensors --time-budget 120 --yes
+atom run sensors --time-budget 120 --yes                             # torch-free features
+
+atom pack sensors.csv --target status --type timeseries --time ts --group machine_id --ts-layout raw
+atom run sensors --methods conv1d-classifier,lstm-classifier --yes   # deep (needs [torch])
 ```
 
 `--split` controls the train / validation / test partition (a deterministic

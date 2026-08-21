@@ -295,17 +295,28 @@ def pack_timeseries_csv(
     time_col: str | None = None,
     group_col: str | None = None,
     split: str | None = None,
+    layout: str = "features",
+    max_len: int = 512,
 ) -> Path:
-    """Time-series CSV -> tabular ADP by per-sequence feature extraction (ADR-0008
-    Phase 2, torch-free). Rows are grouped by `group_col` (one sequence per
-    group), ordered by `time_col`, and each numeric feature channel is summarized
-    (mean/std/min/max/last/slope). The result is a tabular package (one row per
-    sequence) the existing classifiers run on — on any machine, no PyTorch. The
-    split is per-sequence, so no group leaks across train/val/test."""
+    """Time-series CSV -> tabular ADP (ADR-0008 Phase 2). Rows are grouped by
+    `group_col` (one sequence per group) and ordered by `time_col`; the label is
+    the group's last value. Two layouts:
+
+    - **features** (default, torch-free): summarize each numeric channel per
+      sequence (mean/std/min/max/last/slope) -> the existing classifiers run on
+      any machine.
+    - **raw**: keep the ordered values, channel-major, padded/truncated to a
+      fixed length L (columns `<ch>__t<k>`). Recorded shape (n_channels, L) lets
+      the deep sequence models (conv1d/lstm) reshape X -> (n, C, L); the tabular
+      classifiers also run on it (the "wide sequence" view).
+
+    The split is per-sequence, so no group leaks across train/val/test."""
     from collections import OrderedDict
 
     from atom.core.ingest.profiler import parse_numeric
 
+    if layout not in ("features", "raw"):
+        raise ValueError(f"--ts-layout must be 'features' or 'raw', got {layout!r}")
     csv_path = Path(csv_path)
     name = name or csv_path.stem
     if not (time_col and group_col and target):
@@ -328,7 +339,7 @@ def pack_timeseries_csv(
                          for r in probe) >= 0.8 * len(probe)
     ]
     if not numeric_feats:
-        raise ValueError("no numeric feature columns to summarize for the time series")
+        raise ValueError("no numeric feature columns for the time series")
 
     groups: "OrderedDict[str, list]" = OrderedDict()
     for r in rows:
@@ -338,27 +349,43 @@ def pack_timeseries_csv(
         v = parse_numeric(rec[idx[time_col]] if idx[time_col] < len(rec) else "")
         return (0, v) if v is not None else (1, rec[idx[time_col]] if idx[time_col] < len(rec) else "")
 
-    out_header = [f"{c}__{s}" for c in numeric_feats for s in _TS_STATS] + [target]
-    out_rows = []
-    for grp in groups.values():
-        grp_sorted = sorted(grp, key=_tkey)
-        row: list = []
-        for c in numeric_feats:
-            vals = [parse_numeric(r[idx[c]] if idx[c] < len(r) else "") for r in grp_sorted]
-            row += _summarize(vals)
-        row.append(grp_sorted[-1][idx[target]] if idx[target] < len(grp_sorted[-1]) else "")
-        out_rows.append(row)
+    ordered = [(sorted(g, key=_tkey)) for g in groups.values()]
+
+    def _chan(seq, c):
+        return [parse_numeric(r[idx[c]] if idx[c] < len(r) else "") for r in seq]
+
+    if layout == "features":
+        out_header = [f"{c}__{s}" for c in numeric_feats for s in _TS_STATS] + [target]
+        out_rows = [
+            [x for c in numeric_feats for x in _summarize(_chan(seq, c))]
+            + [seq[-1][idx[target]] if idx[target] < len(seq[-1]) else ""]
+            for seq in ordered
+        ]
+        src = {"modality": "timeseries", "layout": "features", "time": time_col,
+               "group": group_col, "stats": list(_TS_STATS), "n_sequences": len(ordered)}
+    else:  # raw: fixed-length channel-major flatten
+        L = min(max(len(seq) for seq in ordered), max_len)
+        out_header = [f"{c}__t{k}" for c in numeric_feats for k in range(L)] + [target]
+        out_rows = []
+        for seq in ordered:
+            flat: list = []
+            for c in numeric_feats:
+                vals = [v if v is not None else 0.0 for v in _chan(seq, c)][:L]
+                vals += [0.0] * (L - len(vals))  # right-pad
+                flat += vals
+            flat.append(seq[-1][idx[target]] if idx[target] < len(seq[-1]) else "")
+            out_rows.append(flat)
+        src = {"modality": "timeseries", "layout": "raw", "time": time_col,
+               "group": group_col, "n_channels": len(numeric_feats), "seq_len": L,
+               "channels": numeric_feats, "n_sequences": len(ordered)}
 
     import tempfile
 
     with tempfile.TemporaryDirectory() as td:
-        feat_csv = Path(td) / f"{name}_tsfeat.csv"
-        with feat_csv.open("w", newline="") as fh:
+        tmp_csv = Path(td) / f"{name}_ts.csv"
+        with tmp_csv.open("w", newline="") as fh:
             w = csv.writer(fh)
             w.writerow(out_header)
             w.writerows(out_rows)
-        return pack_csv(
-            feat_csv, out_dir, name=name, target=target, split=split, modality="tabular",
-            source={"modality": "timeseries", "time": time_col, "group": group_col,
-                    "aggregation": "summary-stats", "stats": list(_TS_STATS),
-                    "n_sequences": len(out_rows)})
+        return pack_csv(tmp_csv, out_dir, name=name, target=target, split=split,
+                        modality="tabular", source=src)

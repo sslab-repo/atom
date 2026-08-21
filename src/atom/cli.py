@@ -201,7 +201,8 @@ def _cmd_pack(args: argparse.Namespace) -> int:
         from atom.data import pack_timeseries_csv
         try:
             root = pack_timeseries_csv(args.csv, args.out, name=args.name, target=args.target,
-                                       time_col=args.time, group_col=args.group, split=args.split)
+                                       time_col=args.time, group_col=args.group, split=args.split,
+                                       layout=args.ts_layout)
         except ValueError as exc:
             raise SystemExit(str(exc)) from exc
         print(f"wrote ADP: {root}  (type: timeseries -> per-sequence features)")
@@ -305,6 +306,9 @@ def main(argv: list[str] | None = None) -> int:
                         help="declared input type (ADR-0008); routes methods at run time")
     p_pack.add_argument("--time", help="time column (required for --type timeseries)")
     p_pack.add_argument("--group", help="sequence/entity id column (required for --type timeseries)")
+    p_pack.add_argument("--ts-layout", choices=["features", "raw"], default="features",
+                        help="timeseries layout: 'features' (summary stats, torch-free) or "
+                             "'raw' (padded sequences for conv1d/lstm)")
     p_pack.set_defaults(func=_cmd_pack)
 
     p_fetch = sub.add_parser("fetch", help="fetch kaggle:<slug> and convert to an ADP")

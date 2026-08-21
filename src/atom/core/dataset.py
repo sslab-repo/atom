@@ -29,6 +29,7 @@ class TabularMatrix:
     features: list[str]
     dropped: dict[str, str] = field(default_factory=dict)  # column -> reason
     unlabeled_dropped: int = 0  # rows removed because the target was missing
+    seq_shape: tuple[int, int] | None = None  # (channels, length) for raw sequences
 
     @property
     def n(self) -> int:

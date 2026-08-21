@@ -112,7 +112,10 @@ def fit_pipeline(
     method = modules[spec.method["name"]]
     config = dict(spec.method["config"])
     config["_seed"] = seed
-    result = method.run(RunContext(Operation.FIT, {"X": X, "y": y}, config=config))
+    fit_data = {"X": X, "y": y}
+    if train.seq_shape is not None:  # raw sequences: hand the (C, L) shape to deep models
+        fit_data["seq_shape"] = train.seq_shape
+    result = method.run(RunContext(Operation.FIT, fit_data, config=config))
     fitted.method = method
     fitted.method_artifacts = result.artifacts
     return fitted

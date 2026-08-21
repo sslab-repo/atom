@@ -95,3 +95,55 @@ def test_timeseries_requires_time_and_group(tmp_path):
     import pytest as _pytest
     with _pytest.raises(ValueError, match="needs --time"):
         pack_timeseries_csv(csvp, tmp_path, name="x", target="y", time_col=None, group_col="g")
+
+
+def test_timeseries_raw_layout(tmp_path):
+    """--ts-layout raw packs padded sequences (channel-major) + records shape."""
+    import csv as _csv
+    import random
+    from atom.data import DatasetPackage, pack_timeseries_csv
+    rng = random.Random(0)
+    csvp = tmp_path / "ts.csv"
+    with csvp.open("w", newline="") as f:
+        w = _csv.writer(f)
+        w.writerow(["e", "t", "s1", "s2", "y"])
+        for e in range(50):
+            up = rng.random() < 0.5
+            for t in range(12):
+                w.writerow([f"e{e}", t, round(t * 0.3 if up else rng.gauss(0, 1), 3),
+                            round(rng.gauss(5, 1), 3), "up" if up else "flat"])
+    root = pack_timeseries_csv(csvp, tmp_path, name="tsr", target="y",
+                               time_col="t", group_col="e", layout="raw")
+    with DatasetPackage.open(root) as pkg:
+        src = pkg.manifest.dataset_source
+        assert src["layout"] == "raw" and src["n_channels"] == 2 and src["seq_len"] == 12
+        # 2 channels x 12 steps = 24 sequence columns
+        seq_cols = [c.name for c in pkg.manifest.columns if "__t" in c.name]
+        assert len(seq_cols) == 24
+        assert sum(pkg.manifest.counts[s] for s in ("train", "val", "test")) == 50
+
+
+def test_conv1d_lstm_train_predict_when_torch():
+    """Deep sequence classifiers register with torch and fit/predict via the
+    seq_shape context; skipped where torch is absent (CPU-only machines)."""
+    if not device.torch_available():
+        import pytest as _pytest
+        _pytest.skip("torch not installed (CPU-only machine)")
+    import numpy as np
+    from atom.contract import Modality, ModuleKind, Operation, RunContext, TaskFamily
+    from atom.registries import find
+    from atom.registries.builtins import load_builtins
+    load_builtins()
+    methods = {m.declares().name: m for m in
+               find(ModuleKind.METHOD, TaskFamily.CLASSIFICATION, Modality.TABULAR)}
+    assert {"conv1d-classifier", "lstm-classifier"} <= set(methods)
+    C, L = 2, 10
+    rng = np.random.RandomState(0)
+    X = rng.normal(size=(60, C * L)).astype(np.float32)
+    y = np.where(X[:, :L].mean(1) > 0, "a", "b").astype(object)
+    for name in ("conv1d-classifier", "lstm-classifier"):
+        m = methods[name]
+        art = m.run(RunContext(Operation.FIT, {"X": X, "y": y, "seq_shape": (C, L)},
+                    config={"epochs": 5, "_seed": 0})).artifacts
+        out = m.run(RunContext(Operation.SCORE, {"X": X}, artifacts=art)).outputs
+        assert out["proba"].shape == (60, 2) and len(out["pred"]) == 60
