@@ -174,10 +174,16 @@ def _fix_histgb_thresholds(onnx_bytes: bytes, sk_model) -> tuple[bytes, bool]:
         attrs = {a.name: helper.get_attribute_value(a) for a in node.attribute}
         tids, nids = attrs["nodes_treeids"], attrs["nodes_nodeids"]
         modes, values = attrs["nodes_modes"], list(attrs["nodes_values"])
+        node_changed = False
         for i in range(len(values)):
             mode = modes[i].decode() if isinstance(modes[i], bytes) else modes[i]
             if mode == "BRANCH_LEQ" and (tids[i], nids[i]) in thresholds:
-                values[i] = thresholds[(tids[i], nids[i])]
+                new_val = thresholds[(tids[i], nids[i])]
+                if new_val != values[i]:
+                    values[i] = new_val
+                    node_changed = True
+        if not node_changed:  # nothing to rewrite in this tree — leave it untouched
+            continue
         attrs["nodes_values"] = values
         new_node = helper.make_node(node.op_type, list(node.input), list(node.output),
                                     name=node.name, domain=node.domain, **attrs)
@@ -316,6 +322,8 @@ def export_amp(
     """Write model/ + manifest.json into run_dir. Returns the manifest."""
     model_dir = run_dir / "model"
     model_dir.mkdir(exist_ok=True)
+    for stale in model_dir.glob("*.onnx"):  # clear orphans from a prior export attempt
+        stale.unlink()
     member_ids = sorted(set(ensemble_members)) if ensemble_members else [0]
 
     graphs, parities, deployable = [], [], True
@@ -336,11 +344,13 @@ def export_amp(
                     parities.append({"graph": name, "pass": False,
                                      "skipped": "torch-in-ensemble"})
                     continue
+                # a single deep model is proba-only regardless of export outcome,
+                # so fix the signature now — a later raise still labels it right.
+                torch_export = True
                 onnx_bytes = _export_torch(net, len(features))
                 parity = _parity_torch(onnx_bytes, candidates[idx], sample_X, classes,
                                        agreement_min, sample_y)
                 parity["graph_repair"] = "torch-onnx"
-                torch_export = True
                 parities.append({"graph": name, **parity})
                 if not parity["pass"]:
                     deployable = False

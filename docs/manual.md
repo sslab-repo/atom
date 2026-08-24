@@ -48,14 +48,17 @@ upgrades in place and preserves `~/atom/config/atom.env`.
 ```bash
 python3 -m venv .venv && source .venv/bin/activate    # macOS/Linux
 pip install -e .                    # core
+pip install -e '.[torch]'           # + deep tier (conv1d/lstm; CUDA/MPS if present)
 pip install -e '.[kaggle]'          # + `atom fetch kaggle:<slug>`
 pip install -e '.[dev]'             # + pytest, ruff
 ```
 
 Core dependencies (installed automatically): `pyarrow`, `numpy`,
-`scikit-learn`, `skl2onnx`, `onnxruntime`. Optional extras: `kaggle`
-(kagglehub), `boosted` (xgboost/lightgbm — auto-registered if present),
-`imbalanced` (imbalanced-learn).
+`scikit-learn`, `skl2onnx`, `onnxruntime`. Optional extras: `torch` (the
+optional PyTorch deep tier — `conv1d`/`lstm` for raw time-series, auto-registered
+when present), `kaggle` (kagglehub), `boosted` (xgboost/lightgbm — auto-registered
+if present), `imbalanced` (imbalanced-learn). Without `torch`, ATOM runs the full
+classical tier; with it, `atom modules verify` reports two extra modules.
 
 Verify:
 
@@ -115,6 +118,7 @@ atom pack <csv> [--target COL] [--name NAME] [--out DIR]
 | `--split TRAIN/VAL/TEST` | `0.8/0.1/0.1` | split ratios, e.g. `0.7/0.15/0.15` (normalized); or `auto` (size-based) |
 | `--type` | `tabular` | declared input type: `tabular`, `text`, or `timeseries` (ADR-0008; images use `pack-images`). Routes methods at run time |
 | `--time COL` / `--group COL` | — | required with `--type timeseries`: the time (ordering) and sequence-id (grouping) columns |
+| `--ts-layout` | `features` | time-series representation: `features` (per-sequence summary stats, torch-free) or `raw` (padded sequences for the deep conv1d/lstm models) |
 
 **Time-series (`--type timeseries`)** groups rows by `--group` (one sequence per
 entity), orders by `--time`, and packs one row per sequence. Two layouts
@@ -289,7 +293,8 @@ accurate. `atom modules list` prints the live set; the stable built-ins are:
 
 | Task family | Methods searched |
 |---|---|
-| classification | logistic-regression, sgd-classifier, perceptron, linear/quadratic-discriminant-analysis, gaussian-naive-bayes, k-nearest-neighbors, support-vector-machine, decision-tree, random-forest, extra-trees, adaboost, gradient-boosting, hist-gradient-boosting, **neural-net-mlp** (feed-forward neural network) |
+| classification (tabular) | logistic-regression, sgd-classifier, perceptron, linear/quadratic-discriminant-analysis, gaussian-naive-bayes, k-nearest-neighbors, support-vector-machine, decision-tree, random-forest, extra-trees, adaboost, gradient-boosting, hist-gradient-boosting, **neural-net-mlp** (feed-forward neural network) |
+| classification (raw time-series) | **conv1d-classifier**, **lstm-classifier** — PyTorch deep tier, added when the package is `--type timeseries --ts-layout raw` and PyTorch is installed |
 | regression | ridge, random-forest-reg, hist-gradient-boosting-reg |
 | clustering | kmeans, gaussian-mixture |
 | anomaly-detection | isolation-forest, lof-novelty |
@@ -297,11 +302,17 @@ accurate. `atom modules list` prints the live set; the stable built-ins are:
 
 `neural-net-mlp` is the deep-learning classifier for **tabular** data — it
 competes head-to-head with the others and wins only when it's genuinely more
-accurate. (CNNs apply to image/spatial data, not tabular columns; GANs are
-generative models, not classifiers; LSTMs are for ordered sequences, not i.i.d.
-tabular rows — none is a tabular classifier.)
-`xgboost`/`lightgbm` register automatically if installed
-(`pip install 'atom-ai[boosted]'`).
+accurate. For **ordered sequences** (raw time-series), the PyTorch tier adds
+`conv1d-classifier` and `lstm-classifier`, which learn temporal patterns the
+summary-feature classifiers can't; they train on the GPU when one is present and
+still export to a portable ONNX graph (see §5). CNNs/LSTMs are *not* tabular
+classifiers — they only join the search for the raw time-series modality; GANs
+are generative models, not classifiers, so ATOM does not search them.
+
+The **deep tier is optional**: `conv1d-classifier`/`lstm-classifier` register
+only when `import torch` succeeds. On a machine without PyTorch they are simply
+absent and the classical tier runs unchanged. `xgboost`/`lightgbm` register
+automatically if installed (`pip install 'atom-ai[boosted]'`).
 
 Restrict the search to specific methods with `atom run --methods A,B,C` — useful
 to compare a shortlist or avoid diluting the budget across all 15 classifiers:
@@ -332,9 +343,13 @@ runs/sales-20260819-101112/
 ```
 
 `deployable: true` in `manifest.json` means the ONNX graph was verified to
-reproduce the trained model's outputs (the parity gate). If a model can't be
-faithfully exported, ATOM ships `deployable: false` and you use `native/` —
-the run never fails for export reasons.
+reproduce the trained model's outputs (the parity gate). This covers both the
+classical (sklearn→ONNX) and deep-tier (PyTorch→ONNX) models — a single
+`conv1d`/`lstm` model exports to a self-contained graph and passes the same gate.
+If a model can't be faithfully exported, ATOM ships `deployable: false` and you
+use `native/` — the run never fails for export reasons. (A deep model selected
+*inside an ensemble* is not yet fused to ONNX and ships `deployable: false`; a
+single deep model is fully deployable.)
 
 ---
 
@@ -354,12 +369,21 @@ feature_order = sig["input"]["features"]        # exact column order the graph e
 sess = ort.InferenceSession(f"{run}/model/pipeline.onnx")
 X = np.array([[...]], dtype=np.float32)          # shape (n_rows, len(feature_order))
 outputs = sess.run(None, {"X": X})
-# classification -> outputs = [labels, probabilities];  regression -> [predictions]
+# read manifest signature.outputs for the exact output list (see below)
 ```
 
 - Feed features as `float32` in the order given by `signature.input.features`.
-- Classification graphs output `label` then `probabilities`; the class order is
-  `signature.label_map`. Regression graphs output `prediction`.
+- **Always read `signature.outputs`** for the graph's actual outputs — they vary
+  by model:
+  - Classical (sklearn) classifiers output `["label", "probabilities"]`.
+  - Deep-tier (`conv1d`/`lstm`) classifiers output `["probabilities"]` only —
+    the graph is a self-contained raw→proba net; derive the label yourself with
+    `label_map[probabilities.argmax(axis=1)]`.
+  - Regression graphs output `["prediction"]`.
+  - In every case the class order is `signature.label_map`.
+- Deep-tier graphs are **self-preprocessing**: NaN-fill, standardization, and the
+  sequence reshape are baked into the graph, so you feed the same raw feature
+  vector — no external scaling needed.
 - For imbalanced binary tasks, `metrics.json` may include a
   `decision_threshold` — apply it to the positive-class probability instead of
   the default 0.5 to reproduce the reported balanced metrics.
@@ -378,6 +402,13 @@ model = pickle.load(open(f"{run}/native/model.pkl", "rb"))
 | Variable | Effect |
 |---|---|
 | `ATOM_HOME` | base dir for the meta-KB and caches (default `~/.atom`); the meta-KB lives at `$ATOM_HOME/metakb` |
+| `ATOM_DEVICE` | force the PyTorch deep tier onto a device: `cpu`, `cuda`, or `mps`. Default is auto-detect (`cuda` → `mps` → `cpu`). No effect on the classical tier |
+
+**Device auto-detection (deep tier).** When PyTorch is installed, the deep
+models pick the best device automatically — CUDA GPU, then Apple-Silicon MPS,
+then CPU — and the run log prints e.g. `device: mps (torch 2.13.0)`. The GPU only
+accelerates training; the exported ONNX graph always serves on CPU onnxruntime.
+Override with `ATOM_DEVICE=cpu` to force CPU training.
 
 The installer keeps all user config in `~/atom/config/atom.env` (sourced by
 your shell rc), so settings survive upgrades. You can also set variables inline:
@@ -482,18 +513,36 @@ atom pack data_bin.csv --target species --name mydata_bin
 atom run mydata_bin --time-budget 300 --yes      # optimizes ROC-AUC, reports accuracy
 ```
 
-### 7.8 Deep-learning (neural-net) classifier
+### 7.8 Deep-learning classifiers
 
-The neural network (`neural-net-mlp`) is searched automatically — no special
-flag. To check whether it beat the classical methods, use the ranking snippet in
-§7.6 and look for `neural-net-mlp`. Give it room to train with a larger budget:
+**Tabular** — the feed-forward network (`neural-net-mlp`) is searched
+automatically, no special flag. To check whether it beat the classical methods,
+use the ranking snippet in §7.6 and look for `neural-net-mlp`. Give it room with
+a larger budget:
 
 ```bash
 atom run mydata --time-budget 600 --yes
 ```
 
-(For **image** classification, pack images with `atom pack-images`; CNN/foundation
-models are the deferred M6 adapters — see `docs/status.md`.)
+**Raw time-series** — pack with `--ts-layout raw` and the PyTorch deep tier
+(`conv1d-classifier`, `lstm-classifier`) joins the search. They learn temporal
+structure directly from the padded sequences and export to a portable ONNX graph
+(`deployable=True`), so you can train on the GPU and serve on a no-torch box:
+
+```bash
+atom pack sensors.csv --target status --type timeseries \
+     --time ts --group machine_id --ts-layout raw --name sensors_raw
+atom run sensors_raw --methods conv1d-classifier,lstm-classifier --time-budget 300 --yes
+# log prints e.g.  device: mps (torch 2.13.0)
+#                  AMP: deployable=True (1 ONNX graph(s), parity ok, selected single)
+```
+
+Force CPU training with `ATOM_DEVICE=cpu` (see §6); the exported graph serves on
+CPU either way. The deep tier needs PyTorch (`pip install 'atom-ai[torch]'`); if
+it's absent these methods are simply not offered.
+
+(For **image** classification, pack images with `atom pack-images`; CNN /
+foundation-embedding models are the deferred adapters — see `docs/status.md`.)
 
 ### 7.9 Choosing the train/val/test split
 
@@ -528,11 +577,13 @@ Health check any install: `atom modules verify` (expect `28/28 ... pass`).
 
 ```
 atom pack <csv> --target COL [--split R] -o DIR CSV  -> ADP   (R=0.7/0.15/0.15 | auto)
+atom pack <csv> --target COL --type timeseries --time T --group G [--ts-layout raw]
 atom fetch kaggle:<owner/ds> --target COL       Kaggle -> ADP   (needs [kaggle])
 atom pack-images <folder>                       image folder -> ADP
 atom inspect <pkg> [--json]                     profile a dataset
 atom run <pkg> --time-budget S --yes            train -> ONNX model package
 atom run <pkg> --methods A,B --yes              restrict search to methods A,B
+atom run <pkg> --methods conv1d-classifier,lstm-classifier --yes   deep (needs [torch])
 atom modules list | verify                      registry / health check
 
 deploy: runs/<name>-<ts>/model/pipeline.onnx    (signature in manifest.json)
