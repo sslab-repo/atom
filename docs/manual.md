@@ -556,7 +556,151 @@ fractions must be > 0. Confirm what was written with `atom inspect <pkg>`.
 
 ---
 
-## 8. Exit codes & troubleshooting
+## 8. Sample commands (try it on public datasets)
+
+A self-contained walkthrough on five real, public datasets — each exercises a
+different part of ATOM. Assumes `atom` is on your PATH (§1). Every command below
+carries a comment describing what it does.
+
+### 8.1 Download the datasets
+
+```bash
+mkdir -p ~/Downloads/sample && cd ~/Downloads/sample     # one folder for the samples
+# five diverse, header-bearing, comma-separated CSVs (no login needed):
+curl -fsSL -o titanic.csv  https://raw.githubusercontent.com/datasciencedojo/datasets/master/titanic.csv   # binary
+curl -fsSL -o iris.csv     https://raw.githubusercontent.com/mwaskom/seaborn-data/master/iris.csv          # multiclass
+curl -fsSL -o penguins.csv https://raw.githubusercontent.com/mwaskom/seaborn-data/master/penguins.csv      # multiclass, dirty
+curl -fsSL -o diamonds.csv https://raw.githubusercontent.com/mwaskom/seaborn-data/master/diamonds.csv      # multiclass, 54k rows
+curl -fsSL -o diabetes.csv https://raw.githubusercontent.com/plotly/datasets/master/diabetes.csv           # binary
+```
+
+| File | Task | `--target` | What it exercises |
+|---|---|---|---|
+| `titanic.csv` (891) | binary | `Survived` | dirty real-world: free-text `Name`/`Ticket`/`Cabin`, missing `Age`, an id column — auto-cleaning |
+| `iris.csv` (150) | multiclass (3) | `species` | fast smoke test |
+| `penguins.csv` (344) | multiclass (3) | `species` | NaN rows + categorical `island`/`sex` |
+| `diamonds.csv` (53,940) | multiclass (5) | `cut` | scale + quoted headers + mixed types |
+| `diabetes.csv` (767) | binary | `Outcome` | all-numeric Pima diabetes |
+
+### 8.2 Binary — Titanic (dirty real-world data)
+
+```bash
+# Convert titanic.csv into a package "titanic": auto-detect column types, drop the
+# free-text/id columns (Name, Ticket, Cabin, PassengerId), fill missing Age,
+# one-hot Sex/Embarked, and make train/val/test splits.
+atom pack ~/Downloads/sample/titanic.csv --target Survived --name titanic
+
+# Print the profile — modality, split sizes, roles, target balance, and which
+# columns were coerced or dropped — before spending compute.
+atom inspect titanic
+
+# Search the classifiers under a 60s budget, evaluate the winner on the locked
+# test split, export the model to runs/titanic-<timestamp>/. Binary → ROC-AUC.
+atom run titanic --time-budget 60 --yes --out runs
+```
+
+### 8.3 Multiclass — Iris (fast)
+
+```bash
+atom pack ~/Downloads/sample/iris.csv --target species --name iris   # pack the 3-species set
+atom run iris --time-budget 30 --yes --out runs                      # 30s search; 3 classes → macro-F1
+```
+
+### 8.4 Multiclass — Penguins (missing values + categoricals)
+
+```bash
+# Pack penguins: exercises the cleaning path — NaN rows plus categorical
+# island/sex columns get imputed and encoded automatically.
+atom pack ~/Downloads/sample/penguins.csv --target species --name penguins
+atom run penguins --time-budget 45 --yes --out runs                  # predicts the 3 species
+```
+
+### 8.5 Multiclass at scale — Diamonds (54k rows)
+
+```bash
+# Pack the 53,940-row diamonds set (quoted headers, mixed numeric + categorical)
+# to classify the "cut" grade — a scale/throughput test.
+atom pack ~/Downloads/sample/diamonds.csv --target cut --name diamonds
+atom run diamonds --time-budget 120 --yes --out runs                 # bigger budget for a bigger set
+```
+
+### 8.6 Binary — Pima diabetes
+
+```bash
+atom pack ~/Downloads/sample/diabetes.csv --target Outcome --name diabetes   # all-numeric, target 0/1
+atom run diabetes --time-budget 60 --yes --out runs                          # binary → ROC-AUC
+```
+
+### 8.7 See which method won (any run)
+
+```bash
+# Load the newest metrics.json for a package (change "diabetes" to your run) and
+# print the selected model kind, the optimized metric, the locked-test scores, and
+# the top-8 candidates ranked by validation score — so you see what ATOM chose and
+# what it beat.
+python3 -c "
+import json, glob
+m = json.load(open(sorted(glob.glob('runs/diabetes-*/metrics.json'))[-1]))   # change name
+print('selected:', m['final'], '| optimized:', m['primary_metric'])
+print('test:', {k: round(v,4) for k,v in m['test'].items()})
+for c in sorted(m['candidates'], key=lambda c: -c['val_score_oriented'])[:8]:
+    print(f\"  {c['val_score_oriented']:.4f}  {c['pipeline']['method']['name']}\")
+"
+```
+
+### 8.8 Restrict the search to a shortlist
+
+```bash
+# Same run, but only search these 3 methods instead of all ~15 — focuses the whole
+# budget on a shortlist (faster, or to compare specific models head-to-head).
+atom run titanic --methods random-forest,hist-gradient-boosting,logistic-regression \
+     --time-budget 30 --yes --out runs
+```
+
+### 8.9 Optional — the deep time-series tier (conv1d / lstm)
+
+None of the five sets is a grouped time-series, so generate a small labeled sensor
+dataset to exercise the PyTorch deep tier (needs `pip install 'atom-ai[torch]'`):
+
+```bash
+# Generate machines.csv: 400 machines × 24 timesteps, 2 channels (temperature,
+# vibration), label failing/healthy. (Tidy grouped-TS CSVs aren't reliably
+# downloadable, so we synthesize one.)
+python3 - <<'PY'
+import csv, random, os
+p = os.path.expanduser("~/Downloads/sample/machines.csv"); rng = random.Random(42)
+with open(p, "w", newline="") as f:
+    w = csv.writer(f); w.writerow(["machine_id","timestamp","temperature","vibration","status"])
+    for mid in range(400):
+        fail = rng.random() < 0.4
+        for t in range(24):
+            w.writerow([f"M{mid:03d}", t,
+                        round(60+(t*0.9 if fail else 0)+rng.gauss(0,2),2),
+                        round(0.5+(t*0.05 if fail else 0)+rng.gauss(0,0.15),3),
+                        "failing" if fail else "healthy"])
+print("wrote", p)
+PY
+
+# Pack as a RAW time-series: group rows per machine_id, order by timestamp, keep the
+# padded raw sequences (channel-major) so the deep nets learn the temporal trend.
+# Split is per-machine (no sequence leaks across train/test).
+atom pack ~/Downloads/sample/machines.csv --target status --type timeseries \
+     --time timestamp --group machine_id --ts-layout raw --name machines_raw
+
+# Search only the two deep models. They train on the GPU (CUDA/MPS) when present and
+# export a self-contained ONNX graph that serves on CPU anywhere (deployable=True).
+atom run machines_raw --methods conv1d-classifier,lstm-classifier --time-budget 60 --yes --out runs
+#   log shows:  device: mps (torch 2.13.0)
+#               AMP: deployable=True (1 ONNX graph(s), parity ok, selected single)
+```
+
+Every `atom run` writes `runs/<name>-<timestamp>/` with `model/pipeline.onnx` (the
+deployable model + `manifest.json` signature), `metrics.json` (all scores), and
+`provenance/` (per-trial log).
+
+---
+
+## 9. Exit codes & troubleshooting
 
 | Symptom | Cause / fix |
 |---|---|
@@ -573,7 +717,7 @@ Health check any install: `atom modules verify` (expect `28/28 ... pass`).
 
 ---
 
-## 9. Quick reference card
+## 10. Quick reference card
 
 ```
 atom pack <csv> --target COL [--split R] -o DIR CSV  -> ADP   (R=0.7/0.15/0.15 | auto)
