@@ -291,9 +291,19 @@ def run_package(
         # it lands in both the terminal summary and metrics.json.
         final_methods = ({kept[i].spec.method["name"] for i in set(ensemble.members)}
                          if use_ensemble else {kept[best_single_idx].spec.method["name"]})
+        # Best full-fidelity HELD-OUT val score per finalized method — the number
+        # selection actually used. The leaderboard ranks by (CV) search score, so
+        # surfacing this reconciles it with the * (blend membership): a method can
+        # top the search leaderboard yet be re-scored lower at full fidelity.
+        final_val_by_method: dict[str, float] = {}
+        for _t, _s in zip(kept, singles):
+            _nm = _t.spec.method["name"]
+            final_val_by_method[_nm] = max(final_val_by_method.get(_nm, float("-inf")), _s)
         leaderboard = orch.method_leaderboard()
         for _r in leaderboard:
             _r["in_final"] = _r["method"] in final_methods
+            _fv = final_val_by_method.get(_r["method"])
+            _r["final_val"] = abs(_fv) if _fv is not None else None  # None = not finalized
 
         if use_ensemble:
             final_test = _combine_test()
@@ -415,12 +425,20 @@ def _print_leaderboard(rows, metric, progress) -> None:
         # only flag fidelity when a method never reached full data — the caveat
         # that its numbers rest on a subsample; full-fidelity is the silent norm.
         partial = f" @f{fid:g}" if fid and fid < 1.0 else ""
+        # finalists carry the held-out val score selection actually used; show it
+        # so the CV-sorted leaderboard reconciles with the * (blend membership).
+        final = (f"   -> final val {r['final_val']:.4f}"
+                 if r.get("final_val") is not None else "")
         progress(f"  {star} {'  '.join(cells)}   {r['method']:<{name_w}s}  "
-                 f"({r['ok']} trial(s){partial})")
+                 f"({r['ok']} trial(s){partial}){final}")
     for r in skipped:
         progress(f"    skipped  {r['method']:<{name_w}s} — {r['reason']}")
-    progress("(validation scores; the locked test set is evaluated once, on the "
-             "final model only — see 'test' above.)")
+    progress("(sorted by cross-validated search score; '-> final val' = the "
+             "finalist re-scored on the held-out val split after a full-data refit "
+             "— the number selection used.)")
+    progress("(* = chosen into the final model (greedy blend) by that held-out "
+             "score, so it can rank differently from the leaderboard; the locked "
+             "test set is scored once, on the final model only — see 'test' above.)")
 
 
 def _parity_sample(val, task, cap: int = 1024, per_class_min: int = 50):

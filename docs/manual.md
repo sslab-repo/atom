@@ -285,14 +285,15 @@ tag on any method that never reached full data — then the result summary:
 
 ```
 === all 17 methods searched — validation metrics at each method's best trial (sorted by roc_auc; * = in the final model) ===
-  * roc_auc=0.8691  acc=0.8066  bal_acc=0.7905  f1_macro=0.7895   random-forest            (233 trial(s))
-    roc_auc=0.8637  acc=0.8272  bal_acc=0.7953  f1_macro=0.8044   neural-net-mlp           (160 trial(s))
+  * roc_auc=0.8691  acc=0.8066  bal_acc=0.7905  f1_macro=0.7895   random-forest            (233 trial(s))   -> final val 0.8827
+    roc_auc=0.8637  acc=0.8272  bal_acc=0.7953  f1_macro=0.8044   neural-net-mlp           (160 trial(s))   -> final val 0.8645
     roc_auc=0.8583  acc=0.8080  bal_acc=0.7832  f1_macro=0.7872   linear-discriminant-analysis  (298 trial(s))
     ...
     roc_auc=0.7519  acc=0.6982  bal_acc=0.6564  f1_macro=0.6423   conv1d-classifier        (152 trial(s) @f0.1)
     skipped  support-vector-machine  — <most-common error line for that method>
     skipped  lstm-classifier         — not reached within the time/trial budget
-(validation scores; the locked test set is evaluated once, on the final model only.)
+(sorted by cross-validated search score; '-> final val' = the finalist re-scored on the held-out val split after a full-data refit — the number selection used.)
+(* = chosen into the final model (greedy blend) by that held-out score, so it can rank differently from the leaderboard.)
 === result ===
   final    : single   trials: 204   elapsed: 118s
   val      : roc_auc=0.8712
@@ -304,9 +305,21 @@ tag on any method that never reached full data — then the result summary:
 The same leaderboard is saved to `metrics.json` under `"leaderboard"` — one entry
 per method with `status`, `best_score`, **`metrics`** (the full per-metric dict),
 **`config`** (the winning hyperparameters, so you can reproduce or deploy that
-method directly), `best_fidelity`, `trials`/`ok`/`errors`, `reason`, and
-`in_final`. Only the winner is scored on the locked test set — by design, so the
-held-out estimate stays honest — so per-method numbers are validation scores.
+method directly), `best_fidelity`, **`final_val`** (the finalist's held-out val
+score, or `null` if the method wasn't finalized), `trials`/`ok`/`errors`,
+`reason`, and `in_final`. Only the winner is scored on the locked test set — by
+design, so the held-out estimate stays honest — so per-method numbers are
+validation scores.
+
+**Two rankings, on purpose.** The leaderboard is sorted by each method's
+best **search** score — cross-validated on small data (val split < 1000 rows), so
+it's stable but optimistic. The final model is chosen differently: ATOM re-fits
+the top pipelines on the full training data, scores them **once on the held-out
+val split** (`-> final val`), and greedily blends the combination that maximizes
+that held-out score. So `*` (blend membership) follows the held-out numbers and
+can differ from the leaderboard order — a method can top the search leaderboard
+yet be re-scored lower at full fidelity (visible as a lower `-> final val`) and so
+not make the blend.
 
 ### 3.6 `atom modules` — inspect the algorithm registry
 

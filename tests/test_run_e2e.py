@@ -69,6 +69,10 @@ def test_run_end_to_end(adp, tmp_path):
     assert any(r["in_final"] for r in lb)                       # winner is flagged
     # a method feeding the final model must itself have scored
     assert all(r["status"] == "scored" for r in lb if r["in_final"])
+    # finalists carry their held-out full-fidelity val score; a starred method
+    # (blend member) is necessarily a finalist, so it must have one
+    assert any(r.get("final_val") is not None for r in lb)
+    assert all(r["final_val"] is not None for r in lb if r["in_final"])
 
 
 def test_budget_trial_bound_respected(adp, tmp_path):
