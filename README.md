@@ -122,11 +122,84 @@ atom run pkgs/mydata --time-budget 120 --yes      # train -> deployable ONNX pac
 atom modules verify                               # health check
 ```
 
+## Example: an end-to-end run
+
+Point ATOM at a CSV; it profiles the data, infers the task, searches every
+applicable method under a time budget, ensembles the best, evaluates on a locked
+test split, and exports a deployable ONNX model — one command. Grab a public
+dataset and go (full walkthrough on five datasets: [`sample_command.md`](sample_command.md)):
+
+```bash
+curl -fsSL -o titanic.csv https://raw.githubusercontent.com/datasciencedojo/datasets/master/titanic.csv
+atom pack titanic.csv --target Survived --name titanic     # CSV -> ATOM Dataset Package
+atom run  titanic --time-budget 600 --yes --out runs        # search -> deployable ONNX package
+```
+
+The run streams a live search log — each rung names the winning algorithm and its
+hyperparameters — then a full leaderboard of **every** method with its validation
+metrics, and the final locked-test result:
+
+```text
+  ... (live search rungs above) ...
+  finalizing: up to 5 candidates at full fidelity…
+  decision threshold tuned on val: 0.545 — test balanced_accuracy 0.747 -> 0.774 (report-only; the AMP outputs probabilities)
+  phases: load_s=0.0s  search_s=510.0s  finalize_s=1.1s  export_s=2.1s
+  AMP: deployable=True (2 ONNX graph(s), parity ok, selected ensemble)
+  === all 17 methods searched — validation metrics at each method's best trial (sorted by roc_auc; * = in the final model) ===
+    * roc_auc=0.8802  acc=0.8203  bal_acc=0.7959  f1_macro=0.8003   extra-trees                      (267 trial(s))   -> final val 0.8782
+      roc_auc=0.8799  acc=0.8422  bal_acc=0.8329  f1_macro=0.8293   gradient-boosting                (155 trial(s))   -> final val 0.8482
+    * roc_auc=0.8788  acc=0.8189  bal_acc=0.8044  f1_macro=0.8033   random-forest                    (214 trial(s))   -> final val 0.8773
+      roc_auc=0.8637  acc=0.8272  bal_acc=0.7953  f1_macro=0.8044   neural-net-mlp                   (155 trial(s))
+      roc_auc=0.8626  acc=0.7819  bal_acc=0.7638  f1_macro=0.7619   support-vector-machine           (224 trial(s))
+      roc_auc=0.8621  acc=0.8148  bal_acc=0.7951  f1_macro=0.7966   quadratic-discriminant-analysis  (204 trial(s))
+      roc_auc=0.8620  acc=0.8066  bal_acc=0.7827  f1_macro=0.7857   linear-discriminant-analysis     (288 trial(s))
+      roc_auc=0.8607  acc=0.8066  bal_acc=0.7717  f1_macro=0.7806   k-nearest-neighbors              (207 trial(s))
+      roc_auc=0.8606  acc=0.7860  bal_acc=0.7859  f1_macro=0.7742   sgd-classifier                   (177 trial(s))
+      roc_auc=0.8598  acc=0.8093  bal_acc=0.7834  f1_macro=0.7881   logistic-regression              (266 trial(s))
+      roc_auc=0.8559  acc=0.7641  bal_acc=0.7626  f1_macro=0.7518   adaboost                         (175 trial(s))
+      roc_auc=0.8467  acc=0.7970  bal_acc=0.7771  f1_macro=0.7781   conv1d-classifier                (144 trial(s) @f0.33)
+      roc_auc=0.8331  acc=0.7942  bal_acc=0.7775  f1_macro=0.7764   gaussian-naive-bayes             (189 trial(s))
+      roc_auc=0.8221  acc=0.7641  bal_acc=0.7511  f1_macro=0.7438   lstm-classifier                  (145 trial(s) @f0.33)
+      roc_auc=0.8212  acc=0.8052  bal_acc=0.7629  f1_macro=0.7754   decision-tree                    (127 trial(s) @f0.33)
+      roc_auc=0.8121  acc=0.7819  bal_acc=0.7541  f1_macro=0.7579   hist-gradient-boosting           (137 trial(s) @f0.33)
+                      acc=0.7627  bal_acc=0.7229  f1_macro=0.7275   perceptron                       (141 trial(s) @f0.33)
+  (sorted by cross-validated search score; '-> final val' = the finalist re-scored on the held-out val split after a full-data refit — the number selection used.)
+  (* = chosen into the final model (greedy blend) by that held-out score, so it can rank differently from the leaderboard; the locked test set is scored once, on the final model only — see 'test' above.)
+=== result ===
+  final    : ensemble   trials: 3219   elapsed: 513s
+  val      : roc_auc=0.8855
+  test     : accuracy=0.7500  balanced_accuracy=0.7465  f1_macro=0.7473  roc_auc=0.8090  decision_threshold=0.5454  balanced_accuracy_tuned=0.7743  f1_macro_tuned=0.7755
+  artifacts: runs/titanic-20260825-145909
+```
+
+**Reading it:**
+- The **leaderboard** lists every searched method with its validation metrics
+  (`roc_auc`, accuracy, balanced-accuracy, f1) at that method's best trial. A
+  `@f0.33` tag means the method never reached full data, so its numbers rest on a
+  subsample.
+- `-> final val` is the finalist re-scored on the held-out val split after a
+  full-data refit — the number model selection actually used. Note
+  `gradient-boosting` tops the leaderboard on cross-validated search score
+  (`0.8799`) but re-scores to `0.8482` at full fidelity, so it isn't picked.
+- `*` marks the methods in the final model (a **greedy ensemble**); it follows the
+  held-out score, so it can differ from the leaderboard order.
+- Per-method numbers are **validation** scores; the locked **test** set is scored
+  once, on the final model only (`=== result ===`). Outputs land in
+  `runs/<name>-<timestamp>/` (`model/pipeline.onnx` + `manifest.json`, `metrics.json`,
+  `provenance/`).
+
 ## Status
 
-**Design phase complete (2026-07-14) — implementation starting.**
+**Implemented and running (tabular).** The end-to-end pipeline works today:
+pack → budgeted multi-fidelity search across 15 classical + 2 optional PyTorch
+deep classifiers → greedy ensemble → locked-test evaluation → parity-gated,
+deployable ONNX model package. Runs on Linux and macOS, CPU-only or GPU
+(CUDA / Apple MPS), with **PyTorch optional** — the classical tier is the
+always-available floor. Time-series packing (feature + raw-sequence layouts) is
+in; image / text / generative adapters are in progress (ADR-0008).
+
 The architecture is specified in [`docs/architecture.md`](docs/architecture.md)
-and settled in accepted decision records ADR-0001..0007 under
+and settled in accepted decision records ADR-0001..0008 under
 [`docs/design/`](docs/design/):
 
 | ADR | Decision |
@@ -138,6 +211,7 @@ and settled in accepted decision records ADR-0001..0007 under
 | 0005 | v1 scope: 9 task families, foundation (zero/few-shot, PEFT), lab-server operating model |
 | 0006 | Budget: wall-clock primary, optional trial count, estimated end time |
 | 0007 | Module promotion: benchmark gate → AI-assisted dossier → minimal human approval |
+| 0008 | Multi-modal + optional PyTorch deep tier (device auto-detect, torch→ONNX export) |
 
 The method taxonomy lives in
 [`docs/design/method-taxonomy.md`](docs/design/method-taxonomy.md);
