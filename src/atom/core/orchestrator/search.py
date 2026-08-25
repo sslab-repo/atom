@@ -28,6 +28,13 @@ REDUCTION = 3
 MAX_ALL_ERROR_BATCHES = 3  # consecutive batches where every trial fails -> stop
 
 
+def _compact_config(config: dict[str, Any]) -> str:
+    """One-line 'k=v,k=v' of a sampled config for the live log (floats trimmed)."""
+    parts = [f"{k}={v:.4g}" if isinstance(v, float) else f"{k}={v}"
+             for k, v in config.items()]
+    return ",".join(parts)
+
+
 @dataclass
 class Trial:
     id: int
@@ -180,9 +187,15 @@ class Orchestrator:
                 batch_ok += len(ok)
                 est = self.budget.estimate()
                 failure = "" if ok else self._rung_error(results)
+                best_desc = ""
+                if ok:  # name the winning algorithm + its params for this rung
+                    b = ok[0]
+                    best_desc = (f", best {self.task.primary_metric}={abs(b.score):.4f}"
+                                 f" {b.spec.method['name']}"
+                                 f"({_compact_config(b.spec.method['config'])})")
                 progress(
                     f"rung f={fidelity:g}: {len(ok)}/{len(results)} ok"
-                    + (f", best {self.task.primary_metric}={abs(ok[0].score):.4f}" if ok else "")
+                    + best_desc
                     + (f" — {failure}" if failure else "")
                     + f"  [{est['elapsed_s']:.0f}s elapsed, ~{est['estimated_end_in_s']:.0f}s left]"
                 )
@@ -223,12 +236,21 @@ class Orchestrator:
             ok = [t for t in trials if t.status == "ok" and t.score is not None]
             errored = [t for t in trials if t.status == "error"]
             if ok:
-                best = max(ok, key=lambda t: t.score)
+                # Judge each method on the most data it actually reached: the best
+                # score among its highest-fidelity trials. Fair across methods (no
+                # method flattered by a lucky small-sample rung) and the reported
+                # per-metric stats are the least optimistic ones available for it.
+                max_fid = max(t.fidelity for t in ok)
+                best = max((t for t in ok if t.fidelity == max_fid), key=lambda t: t.score)
                 rows.append({
                     "method": name, "status": "scored",
                     # scores are stored oriented (higher=better); abs() recovers
                     # the human metric value (loss metrics are stored negated).
-                    "best_score": abs(best.score), "best_fidelity": best.fidelity,
+                    "best_score": abs(best.score), "best_fidelity": max_fid,
+                    # full metric dict + winning config so a caller can compare
+                    # methods on f1/accuracy/etc. and see how to reproduce each.
+                    "metrics": {k: round(v, 4) for k, v in best.metrics.items()},
+                    "config": dict(best.spec.method["config"]),
                     "trials": len(trials), "ok": len(ok), "errors": len(errored),
                     "reason": "",
                 })

@@ -58,9 +58,12 @@ def test_run_end_to_end(adp, tmp_path):
     assert len(names) == len(set(names))                       # each method once
     assert {"logistic-regression", "random-forest"} <= set(names)
     assert all(r["status"] in {"scored", "failed", "not-sampled"} for r in lb)
-    for r in lb:                                                # scored ⇒ score+trials
+    for r in lb:                                                # scored ⇒ stats+config
         if r["status"] == "scored":
             assert r["best_score"] is not None and r["ok"] >= 1
+            assert isinstance(r["metrics"], dict) and r["metrics"]   # f1/acc/etc.
+            assert "roc_auc" in r["metrics"]                         # primary here
+            assert isinstance(r["config"], dict)                     # reproducible
         else:                                                  # skipped ⇒ a reason
             assert r["best_score"] is None and r["reason"]
     assert any(r["in_final"] for r in lb)                       # winner is flagged

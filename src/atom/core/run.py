@@ -382,20 +382,43 @@ def run_package(
         )
 
 
+_METRIC_ABBR = {"balanced_accuracy": "bal_acc", "accuracy": "acc",
+                "f1_macro": "f1_macro", "roc_auc": "roc_auc",
+                "r2": "r2", "rmse": "rmse", "mae": "mae"}
+
+
 def _print_leaderboard(rows, metric, progress) -> None:
-    """Print every searched method with its best validation score, or the reason
-    it produced no result. The locked test set is intentionally scored only once,
-    on the final model, so these are validation numbers — stated in the header."""
+    """Print every searched method with the full validation-metric line at its
+    best trial (primary metric first, then accuracy / f1 / etc.), or the reason
+    it produced no result. Locked test is scored once on the final model only, so
+    these are validation numbers — stated in the header and footer."""
     scored = [r for r in rows if r["status"] == "scored"]
     skipped = [r for r in rows if r["status"] != "scored"]
-    progress(f"=== all {len(rows)} methods searched "
-             f"(best validation {metric}; * = used in the final model) ===")
+    progress(f"=== all {len(rows)} methods searched — validation metrics at each "
+             f"method's best trial (sorted by {metric}; * = in the final model) ===")
+    name_w = max((len(r["method"]) for r in rows), default=8)
+    # Stable column set (primary metric first, then any others seen) so every row
+    # lines up even when a method lacks a metric — e.g. perceptron has no roc_auc.
+    cols = [metric]
     for r in scored:
-        star = " *" if r.get("in_final") else "  "
-        progress(f" {star} {r['best_score']:.4f}  {r['method']:<30s} "
-                 f"{r['ok']} trial(s)")
+        for k in (r.get("metrics") or {}):
+            if k not in cols:
+                cols.append(k)
+    for r in scored:
+        star = "*" if r.get("in_final") else " "
+        m = r.get("metrics") or {}
+        cells = []
+        for k in cols:
+            label = _METRIC_ABBR.get(k, k)
+            cells.append(f"{label}={m[k]:.4f}" if k in m else " " * (len(label) + 7))
+        fid = r.get("best_fidelity")
+        # only flag fidelity when a method never reached full data — the caveat
+        # that its numbers rest on a subsample; full-fidelity is the silent norm.
+        partial = f" @f{fid:g}" if fid and fid < 1.0 else ""
+        progress(f"  {star} {'  '.join(cells)}   {r['method']:<{name_w}s}  "
+                 f"({r['ok']} trial(s){partial})")
     for r in skipped:
-        progress(f"    skipped  {r['method']:<30s} — {r['reason']}")
+        progress(f"    skipped  {r['method']:<{name_w}s} — {r['reason']}")
     progress("(validation scores; the locked test set is evaluated once, on the "
              "final model only — see 'test' above.)")
 

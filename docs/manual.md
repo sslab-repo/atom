@@ -266,16 +266,30 @@ Task is inferred automatically: a declared/`--target` column → classification
 or regression (by cardinality); no target → clustering/anomaly. Override with
 `--task`.
 
-**Terminal output** ends with a full-field leaderboard — every method that was
-searched, its best **validation** score (or the reason it produced none), with
-`*` on the method(s) feeding the final model — then the result summary:
+**During the search**, each rung line names the winning algorithm and its exact
+hyperparameters for that rung, so you can watch what is being tried:
 
 ```
-=== all 15 methods searched (best validation roc_auc; * = used in the final model) ===
-  * 0.8712  random-forest                  41 trial(s)
-    0.8690  hist-gradient-boosting         38 trial(s)
-    0.8641  logistic-regression            52 trial(s)
+rung f=0.1:  9/9 ok, best roc_auc=0.8408 extra-trees(n_estimators=300,max_depth=10,min_samples_leaf=12,class_balance=none)  [9s elapsed, ~26s left]
+rung f=0.33: 3/3 ok, best roc_auc=0.8556 linear-discriminant-analysis(solver=svd)  [14s elapsed, ~22s left]
+rung f=1:    1/1 ok, best roc_auc=0.8691 random-forest(n_estimators=265,max_depth=15,min_samples_leaf=1,class_balance=balanced)  [5s elapsed, ~30s left]
+```
+
+(`f=` is the fidelity — the fraction of training rows used at that rung; the
+search promotes survivors from `0.1 → 0.33 → 1.0`.)
+
+**At the end**, a full-field leaderboard lists every method with its **validation**
+metrics (primary metric first, then accuracy / balanced-accuracy / f1) at that
+method's best trial, `*` on the method(s) feeding the final model, and a `@f<...>`
+tag on any method that never reached full data — then the result summary:
+
+```
+=== all 17 methods searched — validation metrics at each method's best trial (sorted by roc_auc; * = in the final model) ===
+  * roc_auc=0.8691  acc=0.8066  bal_acc=0.7905  f1_macro=0.7895   random-forest            (233 trial(s))
+    roc_auc=0.8637  acc=0.8272  bal_acc=0.7953  f1_macro=0.8044   neural-net-mlp           (160 trial(s))
+    roc_auc=0.8583  acc=0.8080  bal_acc=0.7832  f1_macro=0.7872   linear-discriminant-analysis  (298 trial(s))
     ...
+    roc_auc=0.7519  acc=0.6982  bal_acc=0.6564  f1_macro=0.6423   conv1d-classifier        (152 trial(s) @f0.1)
     skipped  support-vector-machine  — <most-common error line for that method>
     skipped  lstm-classifier         — not reached within the time/trial budget
 (validation scores; the locked test set is evaluated once, on the final model only.)
@@ -287,11 +301,12 @@ searched, its best **validation** score (or the reason it produced none), with
   AMP: deployable=True (1 ONNX graph(s), parity ok, selected single)
 ```
 
-The same leaderboard is saved to `metrics.json` under `"leaderboard"` (one entry
-per method: `status`, `best_score`, `trials`/`ok`/`errors`, `reason`, `in_final`)
-for programmatic access. Only the winner is scored on the locked test set — by
-design, so the held-out estimate stays honest — so per-method numbers are
-validation scores.
+The same leaderboard is saved to `metrics.json` under `"leaderboard"` — one entry
+per method with `status`, `best_score`, **`metrics`** (the full per-metric dict),
+**`config`** (the winning hyperparameters, so you can reproduce or deploy that
+method directly), `best_fidelity`, `trials`/`ok`/`errors`, `reason`, and
+`in_final`. Only the winner is scored on the locked test set — by design, so the
+held-out estimate stays honest — so per-method numbers are validation scores.
 
 ### 3.6 `atom modules` — inspect the algorithm registry
 
@@ -655,7 +670,7 @@ finished run — or pull it programmatically — read `metrics.json["leaderboard
 
 ```bash
 # Reprint the full-field leaderboard for the newest run of a package (change the
-# name), showing each method's status, best validation score, trial count, and
+# name): each method's validation metrics, trial count, winning config, and
 # whether it fed the final model.
 python3 -c "
 import json, glob
@@ -665,7 +680,8 @@ print('selected:', m['final'], '| optimized:', m['primary_metric'],
 for r in m['leaderboard']:
     star = '*' if r['in_final'] else ' '
     if r['status'] == 'scored':
-        print(f\"  {star} {r['best_score']:.4f}  {r['method']:<30s} {r['ok']} trial(s)\")
+        stats = '  '.join(f'{k}={v}' for k, v in r['metrics'].items())
+        print(f\"  {star} {r['method']:<30s} {stats}  ({r['ok']} trials)  {r['config']}\")
     else:
         print(f\"    skipped  {r['method']:<30s} — {r['reason']}\")
 "
