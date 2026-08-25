@@ -286,6 +286,15 @@ def run_package(
         if not use_ensemble:
             best_single_idx = best_idx
 
+        # Full-field report: every searched method with its best validation score
+        # (or skip reason), flagged if it feeds the final model. Computed here so
+        # it lands in both the terminal summary and metrics.json.
+        final_methods = ({kept[i].spec.method["name"] for i in set(ensemble.members)}
+                         if use_ensemble else {kept[best_single_idx].spec.method["name"]})
+        leaderboard = orch.method_leaderboard()
+        for _r in leaderboard:
+            _r["in_final"] = _r["method"] in final_methods
+
         if use_ensemble:
             final_test = _combine_test()
         else:
@@ -340,6 +349,7 @@ def run_package(
                 {"pipeline": t.spec.to_dict(), "val_score_oriented": s}
                 for t, s in zip(kept, singles)
             ],
+            "leaderboard": leaderboard,
             "ensemble_members": ensemble.members if use_ensemble else None,
         })
         writer.write_model({
@@ -356,6 +366,7 @@ def run_package(
                  f"({len(amp['graphs'])} ONNX graph(s), parity "
                  f"{'ok' if all(p.get('pass') for p in amp['parity']) else 'FAILED'}"
                  f", selected {final_kind})")
+        _print_leaderboard(leaderboard, task.primary_metric, progress)
         writer.close()
 
         # Store the flywheel record: fingerprint summary -> winning config.
@@ -369,6 +380,24 @@ def run_package(
             test_metrics=test_metrics, n_trials=len(orch.archive),
             elapsed_s=time.monotonic() - started,
         )
+
+
+def _print_leaderboard(rows, metric, progress) -> None:
+    """Print every searched method with its best validation score, or the reason
+    it produced no result. The locked test set is intentionally scored only once,
+    on the final model, so these are validation numbers — stated in the header."""
+    scored = [r for r in rows if r["status"] == "scored"]
+    skipped = [r for r in rows if r["status"] != "scored"]
+    progress(f"=== all {len(rows)} methods searched "
+             f"(best validation {metric}; * = used in the final model) ===")
+    for r in scored:
+        star = " *" if r.get("in_final") else "  "
+        progress(f" {star} {r['best_score']:.4f}  {r['method']:<30s} "
+                 f"{r['ok']} trial(s)")
+    for r in skipped:
+        progress(f"    skipped  {r['method']:<30s} — {r['reason']}")
+    progress("(validation scores; the locked test set is evaluated once, on the "
+             "final model only — see 'test' above.)")
 
 
 def _parity_sample(val, task, cap: int = 1024, per_class_min: int = 50):

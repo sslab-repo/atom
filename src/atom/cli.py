@@ -249,6 +249,10 @@ def _quiet_library_noise() -> None:
     warnings.filterwarnings("ignore", message=".*y_pred contains classes not in y_true.*")
     warnings.filterwarnings("ignore", message=".*The least populated class in y.*")
     warnings.filterwarnings("ignore", message=".*ill-conditioned matrix.*")
+    # SVC(probability=True) is deprecated in sklearn 1.9; it still works and we
+    # rely on its calibrated proba. Silence the per-fit spam (hundreds/run).
+    # TODO: migrate to CalibratedClassifierCV(SVC(), ensemble=False) before 1.11.
+    warnings.filterwarnings("ignore", message=".*probability.*parameter was deprecated.*")
     try:
         from sklearn.exceptions import ConvergenceWarning
 

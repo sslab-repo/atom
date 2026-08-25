@@ -266,9 +266,19 @@ Task is inferred automatically: a declared/`--target` column → classification
 or regression (by cardinality); no target → clustering/anomaly. Override with
 `--task`.
 
-**Terminal output** ends with:
+**Terminal output** ends with a full-field leaderboard — every method that was
+searched, its best **validation** score (or the reason it produced none), with
+`*` on the method(s) feeding the final model — then the result summary:
 
 ```
+=== all 15 methods searched (best validation roc_auc; * = used in the final model) ===
+  * 0.8712  random-forest                  41 trial(s)
+    0.8690  hist-gradient-boosting         38 trial(s)
+    0.8641  logistic-regression            52 trial(s)
+    ...
+    skipped  support-vector-machine  — <most-common error line for that method>
+    skipped  lstm-classifier         — not reached within the time/trial budget
+(validation scores; the locked test set is evaluated once, on the final model only.)
 === result ===
   final    : single   trials: 204   elapsed: 118s
   val      : roc_auc=0.8712
@@ -276,6 +286,12 @@ or regression (by cardinality); no target → clustering/anomaly. Override with
   artifacts: runs/sales-20260819-101112
   AMP: deployable=True (1 ONNX graph(s), parity ok, selected single)
 ```
+
+The same leaderboard is saved to `metrics.json` under `"leaderboard"` (one entry
+per method: `status`, `best_score`, `trials`/`ok`/`errors`, `reason`, `in_final`)
+for programmatic access. Only the winner is scored on the locked test set — by
+design, so the held-out estimate stays honest — so per-method numbers are
+validation scores.
 
 ### 3.6 `atom modules` — inspect the algorithm registry
 
@@ -631,20 +647,27 @@ atom pack ~/Downloads/sample/diabetes.csv --target Outcome --name diabetes   # a
 atom run diabetes --time-budget 60 --yes --out runs                          # binary → ROC-AUC
 ```
 
-### 8.7 See which method won (any run)
+### 8.7 See which method won (and how every method did)
+
+`atom run` already prints the full leaderboard at the end of the run (every method
+with its best validation score, or why it was skipped). To reprint it from a
+finished run — or pull it programmatically — read `metrics.json["leaderboard"]`:
 
 ```bash
-# Load the newest metrics.json for a package (change "diabetes" to your run) and
-# print the selected model kind, the optimized metric, the locked-test scores, and
-# the top-8 candidates ranked by validation score — so you see what ATOM chose and
-# what it beat.
+# Reprint the full-field leaderboard for the newest run of a package (change the
+# name), showing each method's status, best validation score, trial count, and
+# whether it fed the final model.
 python3 -c "
 import json, glob
 m = json.load(open(sorted(glob.glob('runs/diabetes-*/metrics.json'))[-1]))   # change name
-print('selected:', m['final'], '| optimized:', m['primary_metric'])
-print('test:', {k: round(v,4) for k,v in m['test'].items()})
-for c in sorted(m['candidates'], key=lambda c: -c['val_score_oriented'])[:8]:
-    print(f\"  {c['val_score_oriented']:.4f}  {c['pipeline']['method']['name']}\")
+print('selected:', m['final'], '| optimized:', m['primary_metric'],
+      '| test:', {k: round(v,4) for k,v in m['test'].items()})
+for r in m['leaderboard']:
+    star = '*' if r['in_final'] else ' '
+    if r['status'] == 'scored':
+        print(f\"  {star} {r['best_score']:.4f}  {r['method']:<30s} {r['ok']} trial(s)\")
+    else:
+        print(f\"    skipped  {r['method']:<30s} — {r['reason']}\")
 "
 ```
 

@@ -51,6 +51,22 @@ def test_run_end_to_end(adp, tmp_path):
     assert metrics["primary_metric"] == "roc_auc"
     assert (run_dir / "native" / "model.pkl").exists()
 
+    # metrics.json carries a full-field leaderboard: every searched method once,
+    # each with a status, and the final model's method(s) flagged.
+    lb = metrics["leaderboard"]
+    names = [r["method"] for r in lb]
+    assert len(names) == len(set(names))                       # each method once
+    assert {"logistic-regression", "random-forest"} <= set(names)
+    assert all(r["status"] in {"scored", "failed", "not-sampled"} for r in lb)
+    for r in lb:                                                # scored ⇒ score+trials
+        if r["status"] == "scored":
+            assert r["best_score"] is not None and r["ok"] >= 1
+        else:                                                  # skipped ⇒ a reason
+            assert r["best_score"] is None and r["reason"]
+    assert any(r["in_final"] for r in lb)                       # winner is flagged
+    # a method feeding the final model must itself have scored
+    assert all(r["status"] == "scored" for r in lb if r["in_final"])
+
 
 def test_budget_trial_bound_respected(adp, tmp_path):
     outcome = run_package(

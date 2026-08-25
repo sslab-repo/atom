@@ -209,6 +209,52 @@ class Orchestrator:
                   if t.status == "error" and t.error]
         return errors[0] if errors else ""
 
+    def method_leaderboard(self) -> list[dict[str, Any]]:
+        """Per-method view of the whole search: for every method admitted to the
+        search, its best validation score and trial counts, or — when it produced
+        no usable trial — the reason (all trials errored, or the budget never
+        reached it). Every searched method appears exactly once, so a caller can
+        show the complete field with nothing silently dropped.
+        """
+        order = {"scored": 0, "failed": 1, "not-sampled": 2}
+        rows: list[dict[str, Any]] = []
+        for name in self.methods:
+            trials = [t for t in self.archive if t.spec.method["name"] == name]
+            ok = [t for t in trials if t.status == "ok" and t.score is not None]
+            errored = [t for t in trials if t.status == "error"]
+            if ok:
+                best = max(ok, key=lambda t: t.score)
+                rows.append({
+                    "method": name, "status": "scored",
+                    # scores are stored oriented (higher=better); abs() recovers
+                    # the human metric value (loss metrics are stored negated).
+                    "best_score": abs(best.score), "best_fidelity": best.fidelity,
+                    "trials": len(trials), "ok": len(ok), "errors": len(errored),
+                    "reason": "",
+                })
+            elif errored:
+                sigs: dict[str, int] = {}
+                for t in errored:
+                    if t.error:
+                        line = t.error.strip().splitlines()[-1]
+                        sigs[line] = sigs.get(line, 0) + 1
+                reason = max(sigs, key=sigs.get) if sigs else "all trials failed"
+                rows.append({
+                    "method": name, "status": "failed",
+                    "best_score": None, "best_fidelity": None,
+                    "trials": len(trials), "ok": 0, "errors": len(errored),
+                    "reason": reason,
+                })
+            else:
+                rows.append({
+                    "method": name, "status": "not-sampled",
+                    "best_score": None, "best_fidelity": None,
+                    "trials": 0, "ok": 0, "errors": 0,
+                    "reason": "not reached within the time/trial budget",
+                })
+        rows.sort(key=lambda r: (order[r["status"]], -(r["best_score"] or 0.0)))
+        return rows
+
     def error_summary(self) -> tuple[str, int, int]:
         """(most common error signature, its count, total errored trials)."""
         sigs: dict[str, int] = {}
